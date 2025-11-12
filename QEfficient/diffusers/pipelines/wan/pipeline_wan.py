@@ -427,24 +427,24 @@ class QEFFWanPipeline(WanPipeline):
                     timestep = t.expand(latents.shape[0])
 
                 batch_size, num_channels, num_frames, height, width = latents.shape #  modeling
-                p_t, p_h, p_w = self.transformer.model.config.patch_size
+                p_t, p_h, p_w = current_model.config.patch_size
                 post_patch_num_frames = num_frames // p_t
                 post_patch_height = height // p_h
                 post_patch_width = width // p_w
 
                 # patch_states = self.transformer.patch_embedding(latent_model_input)
                 # import pdb; pdb.set_trace()
-                rotary_emb = self.transformer.model.rope(latent_model_input)
+                rotary_emb = current_model.rope(latent_model_input)
                 rotary_emb = torch.cat(rotary_emb, dim=0)
                 ts_seq_len = None
                 # ts_seq_len = timestep.shape[1]
                 timestep = timestep.flatten()
 
-                temb, timestep_proj, encoder_hidden_states, encoder_hidden_states_image = self.transformer.model.condition_embedder(
+                temb, timestep_proj, encoder_hidden_states, encoder_hidden_states_image = current_model.condition_embedder(
                     timestep, prompt_embeds, encoder_hidden_states_image=None, timestep_seq_len=ts_seq_len
                 )
                 if self.do_classifier_free_guidance:
-                    temb, timestep_proj, encoder_hidden_states_neg, encoder_hidden_states_image = self.transformer.model.condition_embedder(
+                    temb, timestep_proj, encoder_hidden_states_neg, encoder_hidden_states_image = current_model.condition_embedder(
                         timestep, negative_prompt_embeds, encoder_hidden_states_image=None, timestep_seq_len=ts_seq_len
                     )
                 # timestep_proj = timestep_proj.unflatten(2, (6, -1)) # for 5 B new_app.py ##TODO: cross check once
@@ -547,13 +547,13 @@ class QEFFWanPipeline(WanPipeline):
         self._current_timestep = None
 
         if not output_type == "latent":
-            latents = latents.to(self.vae_decode.model.dtype)
+            latents = latents.to(self.vae_decode.dtype)
             latents_mean = (
-                torch.tensor(self.vae_decode.model.config.latents_mean)
-                .view(1, self.vae_decode.model.config.z_dim, 1, 1, 1)
+                torch.tensor(self.vae_decode.config.latents_mean)
+                .view(1, self.vae_decode.config.z_dim, 1, 1, 1)
                 .to(latents.device, latents.dtype)
             )
-            latents_std = 1.0 / torch.tensor(self.vae_decode.model.config.latents_std).view(1, self.vae_decode.model.config.z_dim, 1, 1, 1).to(
+            latents_std = 1.0 / torch.tensor(self.vae_decode.config.latents_std).view(1, self.vae_decode.config.z_dim, 1, 1, 1).to(
                 latents.device, latents.dtype
             )
             latents = latents / latents_std + latents_mean
