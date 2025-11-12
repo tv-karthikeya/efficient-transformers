@@ -17,7 +17,6 @@ from QEfficient import QEFFWanPipeline
 model_id = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
 pipeline = QEFFWanPipeline.from_pretrained(model_id, vae=vae)
-import pdb; pdb.set_trace()
 pipeline.transformer.model.config.num_layers = 2
 pipeline.transformer_2.model.config.num_layers = 2
 original_blocks = pipeline.transformer.model.blocks
@@ -27,7 +26,7 @@ pipeline.transformer_2.model.blocks = torch.nn.ModuleList([org_blocks[i] for i i
 pipeline.to("cpu")
 
 
-pipeline.compile(num_devices_transformer=2,num_devices_transformer_2=2)
+pipeline.compile(num_devices_transformer=16,num_devices_transformer_2=16)
 # flow_shift = 3.0  # 5.0 for 720P, 3.0 for 480P
 height = 480 # for 480-P
 width = 832

@@ -60,8 +60,9 @@ class QEFFBaseModel(ABC):
         self.onnx_path: Optional[str] = None
         self.qpc_path: Optional[str] = None
         self.qpc_session: Optional[QAICInferenceSession] = None
+        # replace self.model.config with qeff_model.model.transformer_high.config
         self.model_architecture = (
-            (arch := getattr(self.model.config, "architectures", None)) and len(arch) > 0 and arch[0]
+            (arch := getattr(self.model.transformer_high.config, "architectures", None)) and len(arch) > 0 and arch[0]
         ) or None
 
         # Flag for checking if weights are offloaded

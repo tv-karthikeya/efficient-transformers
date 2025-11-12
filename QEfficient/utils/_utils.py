@@ -535,8 +535,11 @@ def create_model_params(qeff_model, **kwargs) -> Dict:
     try:
         model_params["config"] = qeff_model.model.config.to_diff_dict()
     except AttributeError:
-        #TODO check with team *** AttributeError: 'FrozenDict' object has no attribute 'to_diff_dict'
-        model_params["config"] = qeff_model.model.config.__dict__
+        #TODO check with team *** AttributeError: 'FrozenDict' object has no attribute 'to_diff_dict'\
+        # import pdb; pdb.set_trace()
+        # model_params["config"] = qeff_model.model.config.__dict__
+        ##### for single onnx  TODO check this to use commonly
+        model_params["config"] = qeff_model.model.transformer_high.config.__dict__
     model_params["peft_config"] = getattr(qeff_model.model, "active_peft_config", None)
     model_params["applied_transform_names"] = qeff_model._transform_names()
     return model_params

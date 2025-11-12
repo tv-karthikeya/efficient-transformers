@@ -530,6 +530,174 @@ class QEffFluxTransformerModel(QEFFBaseModel):
         return mname
 
 
+class QEFFWanUnifiedWrapper(nn.Module):
+    # class QEFFWanUnifiedWrapper(QEFFBaseModel):
+    # _pytorch_transforms = [AttentionTransform, CustomOpsTransform, NormalizationTransform ]
+    # _onnx_transforms = [FP16ClipTransform, SplitTensorsTransform]
+    def __init__(self, transformer_high, transformer_low, boundary_timestep):
+        # super().__init__(transformer_high) # cant pass single transformer as model with QEFFBaseModel 
+        # self.model = transformer_high # this way is causing issue (need to update )
+        super().__init__()
+        self.transformer_high = transformer_high
+        self.transformer_low = transformer_low
+        self.boundary_timestep = torch.tensor(boundary_timestep)
+        
+    def forward(
+        self,
+        hidden_states,
+        encoder_hidden_states,
+        rotary_emb,
+        temb,
+        timestep_proj,
+        tsp,
+        attention_kwargs=None,
+        return_dict=False,
+    ):
+        # Condition based on timestep value
+        # timestep shape: [batch_size]
+        # import pdb; pdb.set_trace()
+        is_high_noise = tsp.shape[0] >= self.boundary_timestep
+        # Run both models
+        noise_pred_high = self.transformer_high(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            rotary_emb = rotary_emb,
+            temb = temb,
+            timestep_proj = timestep_proj,
+            attention_kwargs=attention_kwargs,
+            return_dict=False,
+        )[0]
+        
+        noise_pred_low = self.transformer_low(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            rotary_emb = rotary_emb,
+            temb = temb,
+            timestep_proj = timestep_proj,
+            attention_kwargs=attention_kwargs,
+            return_dict=False,
+        )[0]
+        
+        # Select based on timestep condition
+        noise_pred = torch.where(
+            is_high_noise==torch.tensor(True),
+            noise_pred_high,
+            noise_pred_low
+        )
+
+        return noise_pred
+        
+        # return (noise_pred,) if not return_dict else noise_pred
+
+class QEFFWanUnifiedTransformer(QEFFBaseModel):
+
+    _pytorch_transforms = [AttentionTransform, CustomOpsTransform, NormalizationTransform ]
+    _onnx_transforms = [FP16ClipTransform, SplitTensorsTransform]
+    
+    def __init__(self, unified_transformer):
+        super().__init__(unified_transformer)
+        self.model =  unified_transformer
+
+    def get_onnx_config(self, batch_size=1, seq_length=512, cl=3840, latent_height=24, latent_width=40, current_timestep=875): #cl = 3840, # TODO update generic for Wan 2.2 5 B (6240), 14 B
+        example_inputs = {
+            ## TODO : chekc AttributeError: 'QEFFWanUnifiedWrapper' object has no attribute 'config' #self.model.config.in_channels, self.model.config.out_channels (self.model.transformer_high.config)
+            "hidden_states": torch.randn(batch_size, 16, 16, latent_height, latent_width ,dtype=torch.float32), #TODO check self.model.config.num_frames - wan 5B  #1, 48, 16, 30, 52
+            "encoder_hidden_states": torch.randn(batch_size, seq_length , 5120, dtype=torch.float32), # BS, seq len , text dim #TODO: check why 5120, not like wan 5B - text_dim : 4096
+            "rotary_emb": torch.randn(2, cl, 1, 128 , dtype=torch.float32), #TODO update wtih CL
+            "temb": torch.randn(1, 5120, dtype=torch.float32), #TODO: wan 5b - 1, cl, 3072
+            "timestep_proj": torch.randn(1, 6, 5120, dtype=torch.float32), #TODO  wan 5b - 1, cl, 6, 3072
+            "tsp":torch.ones(current_timestep, dtype=torch.int64) # will be using a parameter to decide based on length 
+      }
+
+        output_names = ["output"]
+
+        dynamic_axes={
+            "hidden_states": {
+                0: "batch_size",
+                1: "num_channels",
+                2: "num_frames",
+                3: "latent_height",
+                4: "latent_width",
+            },
+            "timestep": {0: "steps"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "rotary_emb": {1: "cl"},
+            "tsp": {0: "current_timestep"}
+        }
+
+        return example_inputs, dynamic_axes, output_names
+
+    def export(self, inputs, output_names, dynamic_axes, export_dir=None):
+        return self._export(inputs, output_names, dynamic_axes, export_dir)
+
+    #TODO: pass values from compile
+    def get_specializations(
+        self,
+        batch_size: int,
+        seq_len: int,
+        latent_height: int,
+        latent_width:int,
+        cl:int,
+        timesteps: list
+    ):
+        ## TODO update with timesteps
+        specializations = [
+            {
+                "batch_size": batch_size,
+                "num_channels": 16, #self.model.in_channels, # TODO update with self.model wan 5B=48
+                "num_frames": "16",
+                "latent_height": "24",
+                "latent_width": "40",
+                "sequence_length": seq_len,
+                "steps": 1,
+                "cl": "3840",
+                "current_timestep": timestep
+            } for timestep in timesteps
+        ]
+
+        return specializations
+
+    def compile(
+        self,
+        compile_dir,
+        compile_only,
+        specializations,
+        convert_to_fp16,
+        mxfp6_matmul,
+        mdp_ts_num_devices,
+        aic_num_cores,
+        custom_io,
+        **compiler_options,
+    ) -> str:
+        return self._compile(
+            compile_dir=compile_dir,
+            compile_only=compile_only,
+            specializations=specializations,
+            convert_to_fp16=convert_to_fp16,
+            mxfp6_matmul=mxfp6_matmul,
+            mdp_ts_num_devices=mdp_ts_num_devices,
+            aic_num_cores=aic_num_cores,
+            custom_io=custom_io,
+            **compiler_options,
+        )
+
+    @property
+    def model_hash(self) -> str:
+        # Compute the hash with: model_config, continuous_batching, transforms
+        mhash = hashlib.sha256()
+        mhash.update(to_hashable(dict(self.model.config)))
+        mhash.update(to_hashable(self._transform_names()))
+        mhash = mhash.hexdigest()[:16]
+        return mhash
+
+    @property
+    def model_name(self) -> str:
+        mname = self.model.__class__.__name__
+        if mname.startswith("QEff") or mname.startswith("QEFF"):
+            mname = mname[4:]
+        return mname
+
+#TODO: clean up below if unified working fine
 class QEffWanTransformerModel(QEFFBaseModel):
     _pytorch_transforms = [AttentionTransform, CustomOpsTransform, NormalizationTransform ]
     _onnx_transforms = [FP16ClipTransform, SplitTensorsTransform]
