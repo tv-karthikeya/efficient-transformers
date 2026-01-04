@@ -33,18 +33,15 @@
                               "device_ids": null
                           }
     },
-    "vae_decoder": 
+    "vae_decoder":
                     {
-                      "specializations": [ 
+                      "specializations": [
                                           {
                                             "batch_size": 1,
-                                            "num_channels": 16,
-                                            "num_frames": 21,
-                                            "latent_height": 60,
-                                            "latent_width": 104
+                                            "num_channels": 16
                                           }
                                       ],
-                      "compilation": 
+                      "compilation":
                                         {
                                           "onnx_path": null,
                                           "compile_dir": null,
