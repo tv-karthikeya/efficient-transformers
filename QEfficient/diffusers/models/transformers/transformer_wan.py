@@ -16,6 +16,12 @@ and combined QKV-blocking.
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from diffusers.models.attention import FeedForward
+import math
+import os
 from diffusers.loaders.peft import _SET_ADAPTER_SCALE_FN_MAPPING
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.transformers.transformer_wan import (
@@ -289,3 +295,170 @@ class QEffWanTransformer3DModel(WanTransformer3DModel):
             return (output,)
 
         return Transformer2DModelOutput(sample=output)
+
+
+############################### FFN blocking
+
+class QEffWanFeedForward(FeedForward):
+
+    def __qeff_init__(self):
+        self.hidden_dim = self.net[0].proj.out_features # inner dim
+
+        self.w1 = self.net[0].proj
+        self.droput = self.net[1]
+        self.w2 = self.net[2]
+
+
+    def _forward_default(self, x: torch.Tensor) -> torch.Tensor:
+        """Default forward pass without blocking"""
+        return self.w2(self.droput(torch.nn.functional.gelu(self.w1(x))))
+
+    def forward_token_blocked(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Token blocking: Process tokens in blocks.
+        Pattern: For each token_block:
+            X = self.w1(token_block)
+            Y = torch.nn.functional.gelu(X)
+            W = self.droput(Y)
+            output = self.w2(W)
+        Result: concatenate along token dimension
+        """
+        _, seqlen, dim = x.shape
+        token_block_size = int(os.environ.get('ffn_token_block_size', seqlen))
+
+        if seqlen <= 512:
+            return self._forward_default(x)
+
+        num_token_blocks = math.ceil(seqlen / token_block_size)
+        outputs = []
+
+        for token_idx in range(num_token_blocks):
+            start_idx = token_idx * token_block_size
+            end_idx = min(start_idx + token_block_size, seqlen)
+            token_block = x[:, start_idx:end_idx, :]
+
+            X = self.w1(token_block)
+            Y = torch.nn.functional.gelu(X)
+            # Z = self.w3(token_block)
+            # W = Y * Z
+            W = self.droput(Y)
+
+            output_block = self.w2(W)
+            outputs.append(output_block)
+
+        # Concatenate along token dimension
+        return torch.cat(outputs, dim=1)  # [BS, seqlen, dim]
+
+    def forward_weight_blocked(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Weight blocking: Process hidden dimensions in chunks to reduce intermediate size.
+
+        Pattern: For each hidden_block:
+            X = gate_weights[hidden_block] @ input
+            Y = nonlinearity(X)
+            W = dropout(Y)
+            result += down_weights[:, hidden_block] @ W
+        """
+        BS, seqlen, dim = x.shape
+        weight_block_size = int(os.environ.get('ffn_weight_block_size', self.hidden_dim))
+
+        if self.hidden_dim <= 2048:
+            return self._forward_default(x)
+
+        num_weight_blocks = math.ceil(self.hidden_dim / weight_block_size)
+        result = torch.zeros(BS, seqlen, dim, device=x.device, dtype=x.dtype)
+
+        for weight_idx in range(num_weight_blocks):
+            h_start = weight_idx * weight_block_size
+            h_end = min(h_start + weight_block_size, self.hidden_dim)
+
+            # Extract weight blocks
+            w1_block = self.w1.weight[h_start:h_end, :]
+            # w3_block = self.w3.weight[h_start:h_end, :]
+            w2_block = self.w2.weight[:, h_start:h_end]
+
+            w1_bias = self.w1.bias[h_start:h_end] if self.w1.bias is not None else None
+            # w3_bias = self.w3.bias[h_start:h_end] if self.w3.bias is not None else None
+            w2_bias = self.w2.bias if (weight_idx == 0 and self.w2.bias is not None) else None
+
+            X = F.linear(x, w1_block, w1_bias)
+            Y = torch.nn.functional.gelu(X)
+            # Z = F.linear(x, w3_block, w3_bias)
+            # W = Y * Z
+            W = self.droput(Y)
+
+            result += F.linear(W, w2_block, w2_bias)
+
+        return result
+
+    def forward_token_weight_blocked(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Both token and weight blocking: Process tokens and hidden dims in chunks.
+
+        Pattern: For each token_block:
+                   For each hidden_block:
+                     X = gate_weights[hidden_block] @ token_block
+                     Y = nonlinearity(X)
+                     W = dropout(Y)
+                     result[token_positions] += down_weights[:, hidden_block] @ W
+        """
+        BS, seqlen, dim = x.shape
+        token_block_size = int(os.environ.get('ffn_token_block_size', seqlen))
+        weight_block_size = int(os.environ.get('ffn_weight_block_size', self.hidden_dim))
+
+        if seqlen <= 512 and self.hidden_dim <= 2048:
+            return self._forward_default(x)
+
+        num_token_blocks = math.ceil(seqlen / token_block_size)  # seqlen = 5040
+        num_weight_blocks = math.ceil(self.hidden_dim / weight_block_size) # self.hidden_dim = 13,824
+        result = torch.zeros(BS, seqlen, dim, device=x.device, dtype=x.dtype)
+
+        # token blocks
+        for token_idx in range(num_token_blocks):
+            t_start = token_idx * token_block_size
+            t_end = min(t_start + token_block_size, seqlen)
+
+            # Extract token block
+            token_block = x[:, t_start:t_end, :]
+
+            # weight blocks
+            for weight_idx in range(num_weight_blocks):
+                h_start = weight_idx * weight_block_size
+                h_end = min(h_start + weight_block_size, self.hidden_dim)
+
+                # Extract weight blocks
+                w1_block = self.w1.weight[h_start:h_end, :]
+                # w3_block = self.w3.weight[h_start:h_end, :]
+                w2_block = self.w2.weight[:, h_start:h_end]
+
+                w1_bias = self.w1.bias[h_start:h_end] if self.w1.bias is not None else None
+                # w3_bias = self.w3.bias[h_start:h_end] if self.w3.bias is not None else None
+                w2_bias = self.w2.bias if (weight_idx == 0 and self.w2.bias is not None) else None
+
+                X = F.linear(token_block, w1_block, w1_bias)
+                Y = torch.nn.functional.gelu(X)
+                # Z = F.linear(token_block, w3_block, w3_bias)
+                # W = Y * Z
+                W = self.droput(Y)
+                result[:, t_start:t_end, :] += F.linear(W, w2_block, w2_bias)
+
+        return result
+
+    def _get_ffn_blocking_mode(self):
+        """Get FFN blocking mode from environment variable"""
+        mode = os.environ.get('FFN_BLOCKING_MODE', 'default').lower()
+        valid_modes = ['default', 'token', 'weight', 'token_weight']
+        if mode not in valid_modes:
+            raise ValueError(f"Invalid FFN_BLOCKING_MODE: {mode}. Must be one of {valid_modes}")
+        return mode
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        blocking_mode = self._get_ffn_blocking_mode()
+        if blocking_mode == "token":
+            return self.forward_token_blocked(x)
+        elif blocking_mode == "weight":
+            return self.forward_weight_blocked(x)
+        elif blocking_mode == "token_weight":
+            return self.forward_token_weight_blocked(x)
+        else:  # default
+            return self._forward_default(x)

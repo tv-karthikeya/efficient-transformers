@@ -20,6 +20,8 @@ from diffusers.models.transformers.transformer_flux import (
     FluxTransformerBlock,
 )
 from diffusers.models.transformers.transformer_wan import WanAttention, WanAttnProcessor, WanTransformer3DModel
+from diffusers.models.attention import FeedForward
+
 from torch import nn
 
 from QEfficient.base.pytorch_transforms import ModuleMappingTransform
@@ -46,6 +48,7 @@ from QEfficient.diffusers.models.transformers.transformer_wan import (
     QEffWanAttention,
     QEffWanAttnProcessor,
     QEffWanTransformer3DModel,
+    QEffWanFeedForward
 )
 
 
@@ -70,6 +73,7 @@ class AttentionTransform(ModuleMappingTransform):
         WanEncoder3d: QEffWanEncoder3d,
         WanResidualBlock: QEffWanResidualBlock,
         WanResample: QEffWanResample,
+        FeedForward :QEffWanFeedForward, #TODO :  discuss and move
     }
 
 

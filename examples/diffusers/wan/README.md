@@ -137,6 +137,7 @@ Update custom config with qpc in execute of corresponding module.
 
 Use environment variables to enable attention blocking:
 
+valid modes = ["kv", "qkv", "q", "default"]
 ```bash
 # For 180p Generation (192x320) with HKV blocking
 ATTENTION_BLOCKING_MODE=kv head_block_size=16 num_kv_blocks=3 python wan_lightning.py
@@ -146,6 +147,20 @@ ATTENTION_BLOCKING_MODE=qkv head_block_size=16 num_kv_blocks=21 num_q_blocks=2 p
 
 # for 720P Generation (720x1280) with HQKV blocking
 ATTENTION_BLOCKING_MODE=qkv head_block_size=16 num_kv_blocks=48 num_q_blocks=5 python wan_lightning.py
+```
+
+**To run with FFN blocking**
+
+valid_modes = ['default', 'token', 'weight', 'token_weight']
+
+-  for token blocking set ffn_token_block_size
+-  for weight blocking set ffn_weight_block_size
+-  for token_weight set both ffn_token_block_size, ffn_weight_block_size
+
+
+``` bash
+# example command to run token_weight with 2 blocks for token and weigth
+FFN_BLOCKING_MODE=token_weight  ffn_weight_block_size=6912 ffn_token_block_size=2520  ATTENTION_BLOCKING_MODE=qkv head_block_size=16 num_kv_blocks=21 num_q_blocks=2 python wan_lightning.py
 ```
 
 ### Blocking Modes
