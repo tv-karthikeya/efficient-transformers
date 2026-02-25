@@ -9,6 +9,7 @@ import os
 import warnings
 from pathlib import Path
 from time import perf_counter
+from types import SimpleNamespace
 from typing import List, Optional, Union
 
 import numpy as np
@@ -993,7 +994,36 @@ class QEffCausalLMForTextImageToTextModel(QEFFBaseModel):
         if self.model.qaic_config is not None and self.model.qaic_config.get("num_kv_blocks", None) is not None:
             BlockedKVAttentionTransform.apply(self.model, num_kv_blocks=self.model.qaic_config.get("num_kv_blocks"))
 
-    def export(self, inputs, output_names, dynamic_axes, export_dir=None, offload_pt_weights=True, **kwargs):
+    def prefill(
+        self,
+        enable: Optional[bool] = True,
+        enable_chunking: Optional[bool] = False,
+        retain_full_kv: Optional[bool] = False,
+    ):
+        if enable:
+            if enable_chunking:
+                self.model, tf = PrefillOnlyChunkedTransform.apply(self.model)
+            else:
+                self.model, tf = PrefillOnlyTransform.apply(self.model)
+
+        else:
+            if retain_full_kv:
+                self.model, tf = RevertPrefillKeepAttentionTransform.apply(self.model)
+            else:
+                self.model, tf = RevertPrefillOnlyTransform.apply(self.model)
+
+    def export(
+        self,
+        inputs,
+        output_names,
+        dynamic_axes,
+        export_dir=None,
+        offload_pt_weights=True,
+        prefill_seq_len: Optional[int] = None,
+        prefill_only: bool = False,
+        enable_chunking: bool = False,
+        **kwargs,
+    ):
         """
         Exports the language decoder component to ONNX format.
 
@@ -1017,6 +1047,17 @@ class QEffCausalLMForTextImageToTextModel(QEFFBaseModel):
         str
             Path to the generated ONNX graph file for the language decoder.
         """
+        if prefill_only:
+            if not enable_chunking and self.continuous_batching:
+                raise NotImplementedError(
+                    "Looks like you are trying to run prefix-caching without chunking, this feature is not available yet!"
+                )
+            self.hash_params["prefill_only"] = True
+            self.prefill(enable=True, enable_chunking=enable_chunking)
+        else:
+            self.hash_params["prefill_only"] = False
+            self.prefill(False, retain_full_kv=kwargs.get("retain_full_kv", False))
+
         return self._export(
             inputs,
             output_names=output_names,
@@ -1138,6 +1179,13 @@ class _QEffAutoModelForImageTextToTextDualQPC:
 
         self.vision_model = QEffVisionEncoderForTextImageToTextModel(model, **kwargs)
         self.lang_model = QEffCausalLMForTextImageToTextModel(model, qaic_config=qaic_config, **kwargs)
+        self.prefill_lang_model = SimpleNamespace(
+            onnx_path=None,
+            qpc_path=None,
+            export=self.lang_model.export,
+            compile=self.lang_model.compile,
+            model=self.lang_model.model,
+        )
         self.continuous_batching = continuous_batching
         self.ccl_enabled = False
         if qaic_config:
@@ -1195,7 +1243,14 @@ class _QEffAutoModelForImageTextToTextDualQPC:
         List[str]
             A list containing the ONNX paths of the vision model and the language model.
         """
-        return [self.vision_model.onnx_path, self.lang_model.onnx_path]
+        onnx_paths = []
+        if self.vision_model.onnx_path:
+            onnx_paths.append(self.vision_model.onnx_path)
+        if self.lang_model.onnx_path:
+            onnx_paths.append(self.lang_model.onnx_path)
+        if self.prefill_lang_model.onnx_path:
+            onnx_paths.append(self.prefill_lang_model.onnx_path)
+        return onnx_paths
 
     @property
     def qpc_path(self):
@@ -1208,17 +1263,22 @@ class _QEffAutoModelForImageTextToTextDualQPC:
             A list containing both QPC paths if both are compiled, or just one if only one is,
             or None if neither is compiled.
         """
-        if self.vision_model.qpc_path and self.lang_model.qpc_path:
-            return [self.vision_model.qpc_path, self.lang_model.qpc_path]
-        elif self.vision_model.qpc_path:
-            return self.vision_model.qpc_path
-        else:
-            return self.lang_model.qpc_path
+        qpc_paths = []
+        if self.vision_model.qpc_path:
+            qpc_paths.append(self.vision_model.qpc_path)
+        if self.lang_model.qpc_path:
+            qpc_paths.append(self.lang_model.qpc_path)
+        if self.prefill_lang_model.qpc_path:
+            qpc_paths.append(self.prefill_lang_model.qpc_path)
+        return qpc_paths if len(qpc_paths) > 1 else qpc_paths[0]
 
     def export(
         self,
         export_dir: Optional[str] = None,
         use_onnx_subfunctions: bool = False,
+        prefill_seq_len: Optional[int] = None,
+        prefill_only: bool = False,
+        enable_chunking: bool = False,
         **kwargs,
     ) -> str:
         """
@@ -1283,15 +1343,38 @@ class _QEffAutoModelForImageTextToTextDualQPC:
         )
 
         offload_pt_weights = kwargs.get("offload_pt_weights", True)
-        self.lang_model.export(
-            inputs["lang"],
-            output_names["lang"],
-            dynamic_axes["lang"],
-            export_dir=export_dir,
-            offload_pt_weights=offload_pt_weights,
-            use_onnx_subfunctions=use_onnx_subfunctions,
-        )
 
+        if prefill_only and prefill_seq_len > 1:
+            # for prefill stage
+            self.prefill_lang_model.onnx_path = self.prefill_lang_model.export(
+                inputs["lang"],
+                output_names["lang"],
+                dynamic_axes["lang"],
+                export_dir=export_dir,
+                offload_pt_weights=False,  # to use in next export
+                use_onnx_subfunctions=use_onnx_subfunctions,
+                prefill_only=True,
+                enable_chunking=enable_chunking,
+                prefill_seq_len=prefill_seq_len,
+            )
+            # for decode onnx PL = 1
+            self.lang_model.onnx_path = self.lang_model.export(
+                inputs["lang"],
+                output_names["lang"],
+                dynamic_axes["lang"],
+                export_dir=export_dir,
+                offload_pt_weights=offload_pt_weights,
+                use_onnx_subfunctions=use_onnx_subfunctions,
+            )
+        else:
+            self.lang_model.onnx_path = self.lang_model.export(
+                inputs["lang"],
+                output_names["lang"],
+                dynamic_axes["lang"],
+                export_dir=export_dir,
+                offload_pt_weights=offload_pt_weights,
+                use_onnx_subfunctions=use_onnx_subfunctions,
+            )
         return self.onnx_path
 
     def compile(
@@ -1315,6 +1398,9 @@ class _QEffAutoModelForImageTextToTextDualQPC:
         skip_vision: Optional[bool] = False,
         skip_lang: Optional[bool] = False,
         use_onnx_subfunctions: bool = False,
+        split_retained_state_io=False,
+        prefill_only=False,
+        enable_chunking=False,
         **compiler_options,
     ) -> str:
         """
@@ -1433,11 +1519,15 @@ class _QEffAutoModelForImageTextToTextDualQPC:
         if lang_onnx_path:
             self.lang_model.onnx_path = lang_onnx_path
 
+        # TODO update with prefill.onnx_path
         if (self.vision_model.onnx_path is None and vision_onnx_path is None) or (
             self.lang_model.onnx_path is None and lang_onnx_path is None
         ):
             self.export(
                 use_onnx_subfunctions=use_onnx_subfunctions,
+                prefill_only=prefill_only,
+                enable_chunking=enable_chunking,
+                prefill_seq_len=prefill_seq_len,
             )
 
         # TODO this hould be removed once the continous batching is supported for all the models.
@@ -1476,20 +1566,56 @@ class _QEffAutoModelForImageTextToTextDualQPC:
             for output_name in output_names["lang"]:
                 if output_name.endswith("_RetainedState"):
                     custom_io_lang[output_name] = "float16" if "vision_embeds" in output_name else kv_cache_dtype
-            self.lang_model._compile(
-                compile_dir=compile_dir,
-                compile_only=True,
-                retained_state=True,
-                specializations=specializations["lang"],
-                convert_to_fp16=True,
-                mxfp6_matmul=mxfp6_matmul,
-                mdp_ts_num_devices=num_devices,
-                aic_num_cores=num_cores,
-                custom_io=custom_io_lang,
-                mxint8_kv_cache=mxint8_kv_cache,
-                use_onnx_subfunctions=use_onnx_subfunctions,
-                **compiler_options,
-            )
+
+            # compile for prefill
+            if prefill_only:
+                if prefill_seq_len > 1:
+                    self.prefill_lang_model.qpc_path = self.prefill_lang_model.compile(
+                        onnx_path=self.prefill_lang_model.onnx_path,
+                        compile_dir=compile_dir,
+                        compile_only=True,
+                        specializations=specializations["lang"][:1],  # to pass 0 index as list
+                        convert_to_fp16=True,
+                        mxfp6_matmul=mxfp6_matmul,
+                        mdp_ts_num_devices=num_devices,
+                        aic_num_cores=num_cores,
+                        custom_io=custom_io_lang,
+                        mxint8_kv_cache=mxint8_kv_cache,
+                        split_retained_state_io=True,
+                        use_onnx_subfunctions=use_onnx_subfunctions,
+                        **compiler_options,
+                    )
+                self.lang_model.compile(
+                    onnx_path=self.lang_model.onnx_path,
+                    compile_dir=compile_dir,
+                    compile_only=True,
+                    specializations=specializations["lang"][-1:],
+                    convert_to_fp16=True,
+                    mxfp6_matmul=mxfp6_matmul,
+                    mdp_ts_num_devices=num_devices,
+                    aic_num_cores=num_cores,
+                    custom_io=custom_io_lang,
+                    mxint8_kv_cache=mxint8_kv_cache,
+                    use_onnx_subfunctions=use_onnx_subfunctions,
+                    **compiler_options,
+                )
+
+            else:
+                # both prefill and decode in single qpc
+                self.lang_model.compile(
+                    compile_dir=compile_dir,
+                    compile_only=True,
+                    retained_state=True,
+                    specializations=specializations["lang"],
+                    convert_to_fp16=True,
+                    mxfp6_matmul=mxfp6_matmul,
+                    mdp_ts_num_devices=num_devices,
+                    aic_num_cores=num_cores,
+                    custom_io=custom_io_lang,
+                    mxint8_kv_cache=mxint8_kv_cache,
+                    use_onnx_subfunctions=use_onnx_subfunctions,
+                    **compiler_options,
+                )
         return self.qpc_path
 
     def generate(
