@@ -21,10 +21,11 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import numpy as np
 import torch
 from diffusers import WanPipeline
+from diffusers.pipelines.wan.pipeline_wan import prompt_clean
 from tqdm import tqdm
 
 from QEfficient.diffusers.models.transformers.transformer_wan import QEffWanUnifiedWrapper
-from QEfficient.diffusers.pipelines.pipeline_module import QEffVAE, QEffWanUnifiedTransformer
+from QEfficient.diffusers.pipelines.pipeline_module import QEffTextEncoder, QEffVAE, QEffWanUnifiedTransformer
 from QEfficient.diffusers.pipelines.pipeline_utils import (
     ONNX_SUBFUNCTION_MODULE,
     ModulePerf,
@@ -99,8 +100,7 @@ class QEffWanPipeline:
         self.kwargs = kwargs
         self.custom_config = None
 
-        # Text encoder (TODO: Replace with QEfficient UMT5 optimization)
-        self.text_encoder = model.text_encoder
+        self.text_encoder = QEffTextEncoder(model.text_encoder)
 
         # Create unified transformer wrapper combining dual-stage models(high, low noise DiTs)
         self.unified_wrapper = QEffWanUnifiedWrapper(model.transformer, model.transformer_2)
@@ -109,8 +109,11 @@ class QEffWanPipeline:
         # VAE decoder for latent-to-video conversion
         self.vae_decoder = QEffVAE(model.vae, "decoder")
         # Store all modules in a dictionary for easy iteration during export/compile
-        # TODO: add text encoder on QAIC
-        self.modules = {"transformer": self.transformer, "vae_decoder": self.vae_decoder}
+        self.modules = {
+            "text_encoder": self.text_encoder,
+            "transformer": self.transformer,
+            "vae_decoder": self.vae_decoder,
+        }
 
         # Copy tokenizers and scheduler from the original model
         self.tokenizer = model.tokenizer
@@ -361,6 +364,125 @@ class QEffWanPipeline:
         else:
             compile_modules_sequential(self.modules, self.custom_config, specialization_updates)
 
+    def _get_t5_prompt_embeds(
+        self,
+        prompt: Union[str, List[str]] = None,
+        num_videos_per_prompt: int = 1,
+        max_sequence_length: int = 226,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
+        device = device or self._execution_device
+        dtype = dtype or self.text_encoder.model.dtype
+
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        prompt = [prompt_clean(u) for u in prompt]
+        batch_size = len(prompt)
+        text_inputs = self.tokenizer(
+            prompt,
+            padding="max_length",
+            max_length=max_sequence_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_attention_mask=True,
+            return_tensors="pt",
+        )
+        text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
+        seq_lens = mask.gt(0).sum(dim=1).long()
+        aic_text_input = {"input_ids": text_input_ids.numpy(), "attention_mask": mask.numpy()}
+
+        if self.text_encoder.qpc_session is None:
+            self.text_encoder.qpc_session = QAICInferenceSession(
+                str(self.text_encoder.qpc_path), device_ids=self.text_encoder.device_ids
+            )
+        # # # Allocate output buffers for QAIC inference
+        text_encoder_output = {
+            "last_hidden_state": np.random.rand(batch_size, max_sequence_length, 4096).astype(np.float32)
+        }
+        self.text_encoder.qpc_session.set_buffers(text_encoder_output)
+
+        # Run UMT5 encoder inference and measure time
+        start_umt5_time = time.time()
+        prompt_embeds = torch.tensor(self.text_encoder.qpc_session.run(aic_text_input)["last_hidden_state"])
+        end_umt5_time = time.time()
+        text_encoder_perf = end_umt5_time - start_umt5_time
+        pytorch_prompt_embeds = self.text_encoder.model(text_input_ids.to(device), mask.to(device))
+        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+        mad = torch.abs(pytorch_prompt_embeds - prompt_embeds).max()
+        print(f">>>> mad b/w Qaic and torch = {mad}")
+        # import pdb; pdb.set_trace()
+        # zero_mask = prompt_embeds == 0
+        # zero_count = zero_mask.sum().item()
+        # print("Total zeros (+0.0 and -0.0):", zero_count)
+        prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
+        prompt_embeds = torch.stack(
+            [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
+        )
+
+        # duplicate text embeddings for each generation per prompt, using mps friendly method
+        _, seq_len, _ = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+
+        return prompt_embeds, text_encoder_perf
+
+    def encode_prompt(
+        self,
+        prompt: Union[str, List[str]],
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        do_classifier_free_guidance: bool = True,
+        num_videos_per_prompt: int = 1,
+        prompt_embeds: Optional[torch.Tensor] = None,
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        max_sequence_length: int = 226,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
+        r"""Encodes the prompt into text encoder hidden states."""
+        device = device or self._execution_device
+
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        if prompt is not None:
+            batch_size = len(prompt)
+        else:
+            batch_size = prompt_embeds.shape[0]
+
+        perf_text_encoder = 0.0
+
+        if prompt_embeds is None:
+            prompt_embeds, perf_text_encoder = self._get_t5_prompt_embeds(
+                prompt=prompt,
+                num_videos_per_prompt=num_videos_per_prompt,
+                max_sequence_length=max_sequence_length,
+                device=device,
+                dtype=dtype,
+            )
+
+        if do_classifier_free_guidance and negative_prompt_embeds is None:
+            negative_prompt = negative_prompt or ""
+            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+
+            if prompt is not None and type(prompt) is not type(negative_prompt):
+                raise TypeError(
+                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
+                    f" {type(prompt)}."
+                )
+            elif batch_size != len(negative_prompt):
+                raise ValueError(
+                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
+                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
+                    " the batch size of `prompt`."
+                )
+
+            negative_prompt_embeds, perf_negative_prompt_embeds = self._get_t5_prompt_embeds(
+                prompt=negative_prompt,
+                num_videos_per_prompt=num_videos_per_prompt,
+                max_sequence_length=max_sequence_length,
+                device=device,
+                dtype=dtype,
+            )
+        return prompt_embeds, negative_prompt_embeds, perf_text_encoder
+
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
@@ -506,8 +628,7 @@ class QEffWanPipeline:
             batch_size = prompt_embeds.shape[0]
 
         # Step 3: Encode input prompts using UMT5 text encoder
-        # TODO: Update UMT5 on QAIC
-        prompt_embeds, negative_prompt_embeds = self.model.encode_prompt(
+        prompt_embeds, negative_prompt_embeds, text_encoder_perf = self.encode_prompt(
             prompt=prompt,
             negative_prompt=negative_prompt,
             do_classifier_free_guidance=self.do_classifier_free_guidance,
@@ -772,6 +893,7 @@ class QEffWanPipeline:
 
         # Step 10: Collect performance metrics
         perf_data = {
+            "text_encoder": text_encoder_perf,
             "transformer": transformer_perf,
             "vae_decoder": vae_decoder_perf,
         }

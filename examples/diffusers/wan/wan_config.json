@@ -1,6 +1,25 @@
 {
   "description": "Default configuration for Wan pipeline with unified transformer (model_type: 1 for high noise; model_type:2 for low noise)",
   "modules": {
+    "text_encoder": {
+                    "specializations":{
+                                        "batch_size": "1",
+                                        "seq_len": "512"
+                                        },
+                    "compilation":
+                                      {
+                                        "onnx_path": null,
+                                        "compile_dir": null,
+                                        "mdp_ts_num_devices": 1,
+                                        "convert_to_fp16": true,
+                                        "aic_num_cores": 16
+                                      },
+                    "execute":
+                                      {
+                                        "device_ids": null,
+                                        "qpc_path" : null
+                                      }
+  },
     "transformer": {
                     "specializations": [
                                         {
@@ -21,7 +40,7 @@
                     "compilation":  {
                                       "onnx_path": null,
                                       "compile_dir": null,
-                                      "mdp_ts_num_devices": 16,
+                                      "mdp_ts_num_devices": 1,
                                       "mxfp6_matmul": true,
                                       "convert_to_fp16": true,
                                       "compile_only":true,
@@ -45,7 +64,7 @@
                                       {
                                         "onnx_path": null,
                                         "compile_dir": null,
-                                        "mdp_ts_num_devices": 8,
+                                        "mdp_ts_num_devices": 1,
                                         "mxfp6_matmul": false,
                                         "convert_to_fp16": true,
                                         "aic_num_cores": 16,

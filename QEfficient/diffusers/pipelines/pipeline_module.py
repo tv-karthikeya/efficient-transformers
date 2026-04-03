@@ -17,9 +17,7 @@ from QEfficient.diffusers.models.pytorch_transforms import (
     CustomOpsTransform,
     NormalizationTransform,
 )
-from QEfficient.transformers.models.pytorch_transforms import (
-    T5ModelTransform,
-)
+from QEfficient.transformers.models.pytorch_transforms import T5ModelTransform, UMT5ModelTransform
 from QEfficient.utils import constants
 
 
@@ -37,7 +35,7 @@ class QEffTextEncoder(QEFFBaseModel):
         _onnx_transforms (List): ONNX transformations applied after export
     """
 
-    _pytorch_transforms = [CustomOpsTransform, T5ModelTransform]
+    _pytorch_transforms = [CustomOpsTransform, T5ModelTransform, UMT5ModelTransform]
     _onnx_transforms = [FP16ClipTransform, SplitTensorsTransform]
 
     @property
@@ -77,14 +75,14 @@ class QEffTextEncoder(QEFFBaseModel):
 
         # Create example input with max sequence length
         example_inputs = {
-            "input_ids": torch.zeros((bs, self.model.config.max_position_embeddings), dtype=torch.int64),
+            "input_ids": torch.zeros((bs, 512), dtype=torch.int64),  # FIXME : self.model.config.max_position_embeddings
         }
 
         # Define which dimensions can vary at runtime
         dynamic_axes = {"input_ids": {0: "batch_size", 1: "seq_len"}}
 
         # T5 only outputs hidden states, CLIP outputs both hidden states and pooled output
-        if self.model.__class__.__name__ == "T5EncoderModel":
+        if self.model.__class__.__name__ == "T5EncoderModel" or "UMT5EncoderModel":
             output_names = ["last_hidden_state"]
         else:
             output_names = ["last_hidden_state", "pooler_output"]

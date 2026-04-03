@@ -204,6 +204,16 @@ from transformers.models.t5.modeling_t5 import (
     T5Attention,
     T5LayerNorm,
 )
+from transformers.models.umt5.modeling_umt5 import (
+    UMT5Attention,
+    UMT5Block,
+    UMT5EncoderModel,
+    UMT5LayerCrossAttention,
+    UMT5LayerFF,
+    UMT5LayerNorm,
+    UMT5LayerSelfAttention,
+    UMT5Stack,
+)
 from transformers.models.whisper.modeling_whisper import (
     WhisperAttention,
     WhisperDecoder,
@@ -442,6 +452,16 @@ from QEfficient.transformers.models.starcoder2.modeling_starcoder2 import (
 from QEfficient.transformers.models.t5.modeling_t5 import (
     QEffT5Attention,
     QEffT5LayerNorm,
+)
+from QEfficient.transformers.models.umt5.modeling_umt5 import (
+    QEffUMT5Attention,
+    QEffUMT5Block,
+    QEffUMT5EncoderModel,
+    QEffUMT5LayerCrossAttention,
+    QEffUMT5LayerFF,
+    QEffUMT5LayerNorm,
+    QEffUMT5LayerSelfAttention,
+    QEffUMT5Stack,
 )
 from QEfficient.transformers.models.whisper.modeling_whisper import (
     QEffWhisperAttention,
@@ -884,6 +904,20 @@ class T5ModelTransform(ModuleMappingTransform):
     _module_mapping = {
         T5Attention: QEffT5Attention,
         T5LayerNorm: QEffT5LayerNorm,
+    }
+
+
+class UMT5ModelTransform(ModuleMappingTransform):
+    # supported architectures
+    _module_mapping = {
+        UMT5Stack: QEffUMT5Stack,
+        UMT5Block: QEffUMT5Block,
+        UMT5EncoderModel: QEffUMT5EncoderModel,
+        UMT5Attention: QEffUMT5Attention,
+        UMT5LayerNorm: QEffUMT5LayerNorm,
+        UMT5LayerFF: QEffUMT5LayerFF,
+        UMT5LayerSelfAttention: QEffUMT5LayerSelfAttention,
+        UMT5LayerCrossAttention: QEffUMT5LayerCrossAttention,
     }
 
 
