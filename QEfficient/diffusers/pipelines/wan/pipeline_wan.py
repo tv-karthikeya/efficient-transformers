@@ -411,9 +411,6 @@ class QEffWanPipeline:
         mad = torch.abs(pytorch_prompt_embeds - prompt_embeds).max()
         print(f">>>> mad b/w Qaic and torch = {mad}")
         # import pdb; pdb.set_trace()
-        # zero_mask = prompt_embeds == 0
-        # zero_count = zero_mask.sum().item()
-        # print("Total zeros (+0.0 and -0.0):", zero_count)
         prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
         prompt_embeds = torch.stack(
             [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
