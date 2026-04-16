@@ -5,7 +5,7 @@
 #
 # -----------------------------------------------------------------------------
 import math
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 import torch.nn as nn
@@ -322,7 +322,7 @@ class QEffQwen3VLMoeVisionAttention(Qwen3VLMoeVisionAttention):
         block_mask = row_mask & col_mask  # shape: (num_blocks, seq_len, seq_len)
 
         # Combine all blocks into one mask
-        final_mask = torch.ones((seq_len, seq_len), dtype=torch.float32)
+        final_mask = torch.ones((seq_len, seq_len), dtype=torch.float16)
         final_mask[block_mask.any(dim=0)] = 0
 
         final_mask = torch.where(final_mask == 1.0, torch.finfo(q.dtype).min, final_mask)
@@ -334,7 +334,7 @@ class QEffQwen3VLMoeVisionAttention(Qwen3VLMoeVisionAttention):
         v = v.transpose(0, 1)
         attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(self.head_dim)
         attn_weights = attn_weights + attention_mask
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float16).to(q.dtype)
         attn_output = torch.matmul(attn_weights, v)
         attn_output = attn_output.transpose(0, 1)
         attn_output = attn_output.reshape(seq_length, -1)
@@ -359,10 +359,10 @@ def eager_attention_forward(
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) / math.sqrt(module.head_dim)
     if attention_mask is not None:
         attn_weights = torch.where(
-            attention_mask, torch.tensor(MIN_MASKED_ATTENTION_VALUE, dtype=torch.float32), attn_weights
+            attention_mask, torch.tensor(MIN_MASKED_ATTENTION_VALUE, dtype=torch.float16), attn_weights
         )
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float16).to(query.dtype)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
     return attn_output, attn_weights
@@ -619,8 +619,53 @@ class QEffQwen3VLMoeTextModel(Qwen3VLMoeTextModel):
         return local_this
 
 
+# class QEffPrefillChunkedQwen3VLMoeTextSparseMoeBlock(Qwen3VLMoeTextSparseMoeBlock):
+#     def forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+#         print(" in QEffPrefillChunkedQwen3VLMoeTextSparseMoeBlock <<<<<<<<")
+#         B, S, H = hidden_states.shape
+#         T = B * S
+#         x = hidden_states.view(T, H)
+#         act = getattr(self.experts, "act_fn", F.silu)
+
+#         router_logits = self.gate(x)  # [T, E]
+#         prob = F.softmax(router_logits, dim=-1, dtype=hidden_states.dtype)
+#         top_w, top_i = torch.topk(prob, self.top_k, dim=-1)  # [T, k], [T, k]
+#         top_w = top_w / torch.einsum("bi->b", top_w)[:, None]
+#         top_w = top_w.to(x.dtype)
+
+#         # Create routing weights matrix [T, E]
+#         routing_weights = torch.zeros((T, self.num_experts), dtype=x.dtype)
+#         routing_weights.scatter_(1, top_i, top_w)
+
+#         # Allocate output tensor
+#         expert_out = torch.zeros_like(x) # [T, H]
+#         # import pdb; pdb.set_trace()
+
+#         # Loop over all experts
+#         for e in range(self.num_experts):
+#             routing_weight = routing_weights[:, e].unsqueeze(-1)  # [T, 1]
+#             # Get fused gate_up_proj weights for this expert [H, 2I]
+#             W_gate_up_e = self.experts.gate_up_proj[e]  # [H, 2I]
+#             W_dn_e = self.experts.down_proj[e]  # [I, H]
+#             # Apply fused gate_up projection
+#             gate_up = x @ W_gate_up_e  # [T, 2I]
+#             # Split fused gate_up into separate gate and up
+#             I2 = gate_up.shape[-1] // 2
+#             gate = gate_up[:, :I2]  # [T, I]
+#             up = gate_up[:, I2:]    # [T, I]
+#             intermediate = up * act(gate)  # [T, I]
+#             # Down projection
+#             down = intermediate @ W_dn_e  # [T, H]
+#             print(f"....down dtype : {down.dtype}")
+#             # Apply routing weights and accumulate
+#             masked_down = torch.where(routing_weight > 0, down * routing_weight, torch.zeros_like(expert_out, dtype=down.dtype))
+#             expert_out += masked_down
+#         expert_out = expert_out.to(x.dtype).view(B, S, H)
+#         return expert_out, router_logits
+
 class QEffPrefillChunkedQwen3VLMoeTextSparseMoeBlock(Qwen3VLMoeTextSparseMoeBlock):
     def forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        print(">>>>>> in QEffPrefillChunkedQwen3VLMoeTextSparseMoeBlock <<<<<<<<")
         B, S, H = hidden_states.shape
         T = B * S
         x = hidden_states.view(T, H)
@@ -629,7 +674,9 @@ class QEffPrefillChunkedQwen3VLMoeTextSparseMoeBlock(Qwen3VLMoeTextSparseMoeBloc
         router_logits = self.gate(x)  # [T, E]
         prob = F.softmax(router_logits, dim=-1, dtype=hidden_states.dtype)
         top_w, top_i = torch.topk(prob, self.top_k, dim=-1)  # [T, k], [T, k]
-        top_w = top_w / top_w.sum(dim=-1, keepdim=True)
+        # import pdb; pdb.set_trace()
+        # top_w = top_w / top_w.sum(dim=-1, keepdim=True)
+        top_w = top_w / torch.einsum("bi->b", top_w)[:, None]
         top_w = top_w.to(hidden_states.dtype)
 
         # gate_up_proj: [E, H, 2I], down_proj: [E, I, H]
@@ -711,6 +758,16 @@ class QEffQwen3VLEncoderWrapper(nn.Module):
         self.model = model
         self.model.vision_model = self.model.visual
 
+
+    def get_submodules_for_export(self) -> Type[nn.Module]:
+        """
+        Return the set of class used as the repeated layer across the model for subfunction extraction.
+        Notes:
+            This method should return the *class object* (not an instance).
+            Downstream code can use this to find/build subfunctions for repeated blocks.
+        """
+        return {self.model.visual.blocks[0].__class__}
+
     def forward(self, pixel_values, image_grid_thw):
         image_embeds, deepstack_feature_lists = self.model.visual(pixel_values, grid_thw=image_grid_thw)
         bs = image_grid_thw.shape[0]
@@ -727,7 +784,16 @@ class QEffQwen3VLDecoderWrapper(nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
-        self.language_model = self.model.model
+        self.language_model = self.model.model.language_model
+
+    def get_submodules_for_export(self) -> Type[nn.Module]:
+        """
+        Return the set of class used as the repeated layer across the model for subfunction extraction.
+        Notes:
+            This method should return the *class object* (not an instance).
+            Downstream code can use this to find/build subfunctions for repeated blocks.
+        """
+        return {QEffQwen3VLMoeTextDecoderLayer}
 
     def forward(
         self,
@@ -783,6 +849,8 @@ class QEffQwen3VLDecoderWrapper(nn.Module):
 
 class QEffQwen3VLMoeTextSparseMoeBlock(Qwen3VLMoeTextSparseMoeBlock):
     def forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        print(" in QEffQwen3VLMoeTextSparseMoeBlock <<<<<<<<")
+
         B, S, H = hidden_states.shape
         T = B * S
         x = hidden_states.view(T, H)
@@ -790,7 +858,9 @@ class QEffQwen3VLMoeTextSparseMoeBlock(Qwen3VLMoeTextSparseMoeBlock):
         router_logits = self.gate(x)
         prob = F.softmax(router_logits, dim=-1, dtype=torch.float)
         top_w, top_i = torch.topk(prob, self.top_k, dim=-1)
-        top_w = top_w / top_w.sum(dim=1, keepdim=True)
+        #top_w = top_w / top_w.sum(dim=1, keepdim=True)
+        top_w = top_w / torch.einsum("bi->b", top_w)[:, None]
+
         top_w = top_w.to(x.dtype)
         idx = top_i.reshape(-1)
         w_up = self.experts.gate_up_proj.index_select(0, idx)
@@ -805,9 +875,9 @@ class QEffQwen3VLMoeTextSparseMoeBlock(Qwen3VLMoeTextSparseMoeBlock):
         intermediate = up * self.experts.act_fn(gate)
         experts_out = torch.bmm(intermediate, w_dn)
         experts_out = experts_out.view(T, self.top_k, H) * top_w.unsqueeze(-1)
-        experts_out = experts_out.sum(dim=1).view(B, S, H)
-
-        return experts_out, router_logits
+        # experts_out = experts_out.sum(dim=1).view(B, S, H)
+        experts_out = torch.einsum("bnd->bd", experts_out)
+        return experts_out.view(B, S, H), router_logits
 
 
 class QEffQwen3VLMoeForConditionalGeneration(Qwen3VLMoeForConditionalGeneration):
@@ -851,10 +921,10 @@ class QEffQwen3VLMoeForConditionalGeneration(Qwen3VLMoeForConditionalGeneration)
 
         vision_inputs = {}
         lang_inputs = {}
-        vision_inputs["pixel_values"] = torch.zeros((inputs_shapes["pixel_values"]), dtype=torch.float32)
+        vision_inputs["pixel_values"] = torch.zeros((inputs_shapes["pixel_values"]), dtype=torch.float16)
         vision_inputs["image_grid_thw"] = torch.zeros((inputs_shapes["image_grid_thw"]), dtype=torch.int64)
         lang_inputs["input_ids"] = torch.zeros((inputs_shapes["input_ids"]), dtype=torch.int64)
-        lang_inputs["vision_embeds"] = torch.zeros((inputs_shapes["vision_embeds"]), dtype=torch.float32)
+        lang_inputs["vision_embeds"] = torch.zeros((inputs_shapes["vision_embeds"]), dtype=torch.float16)
         lang_inputs["position_ids"] = (
             (
                 torch.arange(constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN, dtype=torch.int64)
@@ -865,7 +935,7 @@ class QEffQwen3VLMoeForConditionalGeneration(Qwen3VLMoeForConditionalGeneration)
             .repeat(4, 1, 1)
         )
         lang_inputs["image_idx"] = torch.zeros((inputs_shapes["image_idx"]), dtype=torch.int64)
-        lang_inputs["deepstack_features"] = torch.zeros((inputs_shapes["deepstack_features"]), dtype=torch.float32)
+        lang_inputs["deepstack_features"] = torch.zeros((inputs_shapes["deepstack_features"]), dtype=torch.float16)
         # Add data for KV
 
         bs: int = constants.ONNX_EXPORT_EXAMPLE_BATCH_SIZE
@@ -880,7 +950,7 @@ class QEffQwen3VLMoeForConditionalGeneration(Qwen3VLMoeForConditionalGeneration)
         lang_inputs["past_key_values"] = [[] for _ in range(self.model.config.text_config.num_hidden_layers)]
         for i in range(self.model.config.text_config.num_hidden_layers):
             for kv in ["key", "value"]:
-                lang_inputs["past_key_values"][i].append(torch.zeros(kv_cache_shape, dtype=torch.float32))
+                lang_inputs["past_key_values"][i].append(torch.zeros(kv_cache_shape, dtype=torch.float16))
 
         if continuous_batching:
             lang_inputs["batch_index"] = torch.arange(bs).view(bs, 1)
@@ -1170,5 +1240,5 @@ class QEffQwen3VLMoeForConditionalGeneration(Qwen3VLMoeForConditionalGeneration)
         return [
             IOInfo(name="input_ids", datatype=torch.int64, shape=("batch_size", "seq_len")),
             IOInfo(name="attention_mask", datatype=torch.int64, shape=("batch_size", "seq_len")),
-            IOInfo(name="pixel_values", datatype=torch.float32, shape=("batch_size", 3, "image_size", "image_size")),
+            IOInfo(name="pixel_values", datatype=torch.float16, shape=("batch_size", 3, "image_size", "image_size")),
         ]

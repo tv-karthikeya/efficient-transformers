@@ -35,7 +35,7 @@ from QEfficient.utils import (
     load_json,
 )
 from QEfficient.utils.export_utils import export_wrapper
-
+from time import perf_counter
 logger = logging.getLogger(__name__)
 
 
@@ -247,7 +247,7 @@ class QEFFBaseModel(ABC):
 
         # Setup temporary paths
         tmp_onnx_dir = export_dir / "onnx_tmp"
-        tmp_onnx_path = tmp_onnx_dir / f"{self.model_name}.onnx"
+        # tmp_onnx_path = tmp_onnx_dir / f"{self.model_name}.onnx"
         tmp_onnx_dir.mkdir(parents=True, exist_ok=True)
 
         # Create input_names from example_inputs
@@ -275,23 +275,27 @@ class QEFFBaseModel(ABC):
                     input_names.append(param)
 
         try:
+            start = perf_counter()
             torch.onnx.export(
                 self.model,
                 (example_inputs,),
-                str(tmp_onnx_path),
+                str(onnx_path),
                 input_names=input_names,
                 output_names=output_names,
                 dynamic_axes=dynamic_axes,
                 opset_version=constants.ONNX_EXPORT_OPSET,
                 **export_kwargs,
             )
+            end = perf_counter()
+            print(f">>>>>>>>>>>>>> Export Time : {end - start:.2f} secs")
+
             logger.info("PyTorch export successful")
             _ = self._offload_model_weights(offload_pt_weights)
-            model = onnx.load(tmp_onnx_path, load_external_data=False)
+            model = onnx.load(onnx_path, load_external_data=False)
 
             # Clear temporary references
             transform_kwargs = {
-                "onnx_base_dir": str(tmp_onnx_dir),
+                "onnx_base_dir": None,
                 "model_name": self.model_name,
             }
             if onnx_transform_kwargs is not None:
@@ -518,10 +522,19 @@ class QEFFBaseModel(ABC):
             command.append(f"-custom-IO-list-file={custom_io_yaml}")
 
         command.append(f"-aic-binary-dir={qpc_path}")
+        command.append("-time-passes")
+        command.append("-aic-perf-metrics")
         logger.info(f"Running compiler: {' '.join(command)}")
+        print(f"Running compiler: {' '.join(command)}")
 
         try:
-            subprocess.run(command, capture_output=True, check=True)
+            from datetime import datetime
+            start = perf_counter()
+            log_file = f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            # subprocess.run(command, capture_output=True, check=True)
+            subprocess.run(command, stdout=open(log_file, "a"), stderr=subprocess.STDOUT, text=True, check=True)
+            end = perf_counter()
+            print(f">>>>>>>>>>>>>> Compile Time : {end - start:.2f} secs")
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
                 "\n".join(
@@ -529,8 +542,7 @@ class QEFFBaseModel(ABC):
                         "Compilation failed!",
                         f"Compiler command: {e.cmd}",
                         f"Compiler exitcode: {e.returncode}",
-                        "Compiler stderr:",
-                        e.stderr.decode(),
+                        f"Compiler stderr:{e.stderr}",
                     ]
                 )
             )

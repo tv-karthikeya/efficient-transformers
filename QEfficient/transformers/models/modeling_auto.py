@@ -973,7 +973,7 @@ class QEffCausalLMForTextImageToTextModel(QEFFBaseModel):
         VlmKVOffloadTransform,
         SplitGateUpWeightsTransform,
     ]
-    _onnx_transforms = [FP16ClipTransform, SplitTensorsTransform]
+    _onnx_transforms = [] #FP16ClipTransform, SplitTensorsTransform
 
     def __init__(self, model, qaic_config: Optional[dict] = None, **kwargs):
         """

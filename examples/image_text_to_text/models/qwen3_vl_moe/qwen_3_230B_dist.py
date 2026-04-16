@@ -18,14 +18,15 @@ from transformers import AutoConfig, AutoProcessor
 from QEfficient import QEFFAutoModelForImageTextToText
 from QEfficient.generation.cloud_infer import QAICInferenceSession
 
-model_id = "Qwen/Qwen3-VL-30B-A3B-Instruct"
+model_id = "Qwen/Qwen3-VL-235B-A22B-Instruct"
+#"Qwen/Qwen3-VL-30B-A3B-Instruct"
 config = AutoConfig.from_pretrained(model_id)
 
 # TODO clean up this script
-# # For Testing Purpose Only
+# # # For Testing Purpose Only
 # config.vision_config.depth = 1
 # config.text_config.num_hidden_layers = 1
-num_devices = 4
+num_devices = 8
 
 qeff_model = QEFFAutoModelForImageTextToText.from_pretrained(
     model_id, attn_implementation="eager", kv_offload=True, config=config
@@ -53,11 +54,10 @@ prefill_qpc_path = qeff_model.compile(
     retain_full_kv=True,
     split_retained_state_io=True,  # This should be used for disagg serving via VLLM
     mos=1,
-    aic_enable_depth_first=True,
     prefill_only=True,
     enable_chunking=True,
     skip_vision=True,
-    use_onnx_subfunctions=False,
+    use_onnx_subfunctions=True, # also with false
 )
 
 
@@ -146,7 +146,7 @@ input_len = inputs["attention_mask"].sum(1, keepdims=True)
 input_ids_length = inputs["input_ids"].shape[1]
 num_chunks = -(input_ids_length // -PREFILL_SEQ_LEN)  # ceil divide without float
 padded_len = num_chunks * PREFILL_SEQ_LEN  # Convert to a multiple of prompt_len
-generation_len = 100 #CTX_LEN - input_len.max()
+generation_len = CTX_LEN - input_len.max()
 print(f"generation_len : {generation_len}")
 generated_ids = np.full((BS, generation_len + 1), pad_token_id)
 
@@ -204,9 +204,9 @@ for i in range(num_chunks):
     chunk_inputs["input_ids"] = lang_inputs["input_ids"][:, i * PREFILL_SEQ_LEN : (i + 1) * PREFILL_SEQ_LEN]
     chunk_inputs["position_ids"] = lang_inputs["position_ids"][..., i * PREFILL_SEQ_LEN : (i + 1) * PREFILL_SEQ_LEN]
     outputs = lang_prefill_session.run(chunk_inputs)
-    # for i in range(config.text_config.num_hidden_layers):
-    #     lang_inputs[f"past_key.{i}"] = outputs[f"past_key.{i}_RetainedState"]
-    #     lang_inputs[f"past_value.{i}"] = outputs[f"past_value.{i}_RetainedState"]
+    for i in range(config.text_config.num_hidden_layers):
+        lang_inputs[f"past_key.{i}"] = outputs[f"past_key.{i}_RetainedState"]
+        lang_inputs[f"past_value.{i}"] = outputs[f"past_value.{i}_RetainedState"]
 
     chunk_inputs["image_idx"] = outputs["image_idx_output"]
 prefill_time = perf_counter() - lang_start + vision_end - vision_start
