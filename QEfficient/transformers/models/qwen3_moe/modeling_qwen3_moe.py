@@ -108,6 +108,8 @@ def eager_attention_forward(
 
 EXPERT_BLOCKING_NUM_NSP = int(os.environ.get("EXPERT_BLOCKING_NUM_NSP", "16"))
 EXPERT_BLOCKING_PACKED_CHUNK_SIZE = int(os.environ.get("EXPERT_BLOCKING_PACKED_CHUNK_SIZE", "256"))
+# export EXPERT_BLOCKING_FORCE_EXPORT_LOOP_SEQ_LEN = 512 to do blocking for SL=512
+EXPERT_BLOCKING_FORCE_EXPORT_LOOP_SEQ_LEN = int(os.environ.get("EXPERT_BLOCKING_FORCE_EXPORT_LOOP_SEQ_LEN", "0"))
 
 
 def _build_matched_idx_from_cumsum(T2Ei: torch.Tensor) -> torch.Tensor:
@@ -157,16 +159,33 @@ def _cumsum_scatter_gather_update_expert_blocked(
         expert_out      : [num_nsp, T, H]         (accumulator, in-out)
     """
     batch_size, seq_len = T2Ei.shape
-    packed_chunk_size = max(1, min(packed_chunk_size, seq_len))
+    is_export = torch.onnx.is_in_onnx_export()
+    force_loop_seq_len = EXPERT_BLOCKING_FORCE_EXPORT_LOOP_SEQ_LEN if is_export else 0
+    loop_seq_len = max(seq_len, force_loop_seq_len) if force_loop_seq_len > 0 else seq_len
+    packed_chunk_size = max(1, min(packed_chunk_size, loop_seq_len))
 
     matched_idx = _build_matched_idx_from_cumsum(T2Ei)
     valid_rows = T2Ei.to(torch.int32).sum(dim=1, keepdim=True)
     row_range = torch.arange(packed_chunk_size, dtype=torch.int32, device=x.device).unsqueeze(0)
     x_expanded = x.unsqueeze(0).expand(batch_size, -1, -1)
     rw_expanded = routing_weight.unsqueeze(-1)
+    if loop_seq_len > seq_len:
+        pad_len = loop_seq_len - seq_len
+        int32_max = torch.iinfo(torch.int32).max
+        matched_idx = torch.cat(
+            [matched_idx, torch.full((batch_size, pad_len), int32_max, dtype=torch.int32, device=x.device)], dim=1
+        )
+        x_expanded = torch.cat([x_expanded, x_expanded.new_zeros((batch_size, pad_len, x_expanded.shape[-1]))], dim=1)
+        rw_expanded = torch.cat(
+            [rw_expanded, rw_expanded.new_zeros((batch_size, pad_len, rw_expanded.shape[-1]))], dim=1
+        )
+        expert_out = torch.cat([expert_out, expert_out.new_zeros((batch_size, pad_len, expert_out.shape[-1]))], dim=1)
 
-    for packed_start in range(0, seq_len, packed_chunk_size):
+    print(">>>>>>>>>>>>>>>>> start of loop in  loop_seq_len, packed_chunk_size:", loop_seq_len, packed_chunk_size)
+    #breakpoint()
+    for packed_start in range(0, loop_seq_len, packed_chunk_size):
         packed_stop = packed_start + packed_chunk_size
+        print(f"............. packed_start :{packed_start} , packed_stop :{packed_stop}")
         chunk_matched_idx = matched_idx[:, packed_start:packed_stop]
 
         x_chunk = CtxGatherFunc3DGeneralized.apply(x_expanded, chunk_matched_idx)
@@ -187,6 +206,8 @@ def _cumsum_scatter_gather_update_expert_blocked(
         )
         expert_out = CtxScatterFunc3DGeneralized.apply(expert_out, chunk_matched_idx, updated_chunk)
 
+    if loop_seq_len > seq_len:
+        expert_out = expert_out[:, :seq_len, :]
     return expert_out
 
 
@@ -234,6 +255,39 @@ class QEffPrefillChunkedQwen3MoeSparseMoeBlock(Qwen3MoeSparseMoeBlock):
             )
         return expert_out.sum(dim=0)
 
+    def _forward_expert_blocked_export_safe(self, x: torch.Tensor, routing_weights: torch.Tensor) -> torch.Tensor:
+        """ONNX-export-safe blocked path that avoids tracing mega all-expert stacked constants."""
+        T, H = x.shape
+        num_nsp = EXPERT_BLOCKING_NUM_NSP
+        if self.num_experts % num_nsp != 0:
+            raise ValueError(
+                f"num_experts ({self.num_experts}) must be divisible by EXPERT_BLOCKING_NUM_NSP ({num_nsp})"
+            )
+        local_experts = self.num_experts // num_nsp
+        rw = routing_weights.transpose(0, 1).contiguous().view(local_experts, num_nsp, T).transpose(0, 1).contiguous()
+        expert_out = x.new_zeros((num_nsp, T, H))
+        for slot in range(local_experts):
+            slot_start = slot * num_nsp
+            slot_experts = self.experts[slot_start : slot_start + num_nsp]
+            W_g = torch.stack([expert.gate_proj.weight.T for expert in slot_experts], dim=0)
+            W_u = torch.stack([expert.up_proj.weight.T for expert in slot_experts], dim=0)
+            W_d = torch.stack([expert.down_proj.weight.T for expert in slot_experts], dim=0)
+            routing_weight = rw[:, slot, :]
+            T2Ei = routing_weight > 0
+            expert_out = _cumsum_scatter_gather_update_expert_blocked(
+                x=x,
+                T2Ei=T2Ei,
+                W_g=W_g,
+                W_u=W_u,
+                W_d=W_d,
+                routing_weight=routing_weight,
+                expert_out=expert_out,
+                act_fn=self.experts[0].act_fn,
+                T=T,
+                packed_chunk_size=EXPERT_BLOCKING_PACKED_CHUNK_SIZE,
+            )
+        return expert_out.sum(dim=0)
+
     def orig_forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         B, S, H = hidden_states.shape
         T = B * S
@@ -272,7 +326,10 @@ class QEffPrefillChunkedQwen3MoeSparseMoeBlock(Qwen3MoeSparseMoeBlock):
         routing_weights.scatter_(1, top_i, top_w)
 
         if self.num_experts % EXPERT_BLOCKING_NUM_NSP == 0:
-            expert_out = self._forward_expert_blocked(x=x, routing_weights=routing_weights)
+            if torch.onnx.is_in_onnx_export():
+                expert_out = self._forward_expert_blocked_export_safe(x=x, routing_weights=routing_weights)
+            # else:
+            #     expert_out = self._forward_expert_blocked(x=x, routing_weights=routing_weights)
             return expert_out.view(B, S, H), router_logits
 
         expert_out = x.new_zeros((T, H))
@@ -450,6 +507,7 @@ class QEffQwen3MoeDecoderLayer(Qwen3MoeDecoderLayer):
         hidden_states = self.post_attention_layernorm(hidden_states)
 
         hidden_states = self.mlp(hidden_states)
+        print(">>>>>>>> mlp is done <<<<<<<<")
         if isinstance(hidden_states, tuple):
             hidden_states, _ = hidden_states
 
@@ -584,6 +642,7 @@ class QEffQwen3MoeForCausalLM(Qwen3MoeForCausalLM):
         logit_idx = position_ids.to(torch.int32).argmax(1, keepdim=True)
         hidden_states = outputs.last_hidden_state[torch.arange(position_ids.shape[0]).view(-1, 1), logit_idx]
         logits = self.lm_head(hidden_states).float()
+        print(">>>>>>>>>> lm_head is done <<<<<<<<<<<")
 
         return MoeCausalLMOutputWithPast(
             logits=logits,
