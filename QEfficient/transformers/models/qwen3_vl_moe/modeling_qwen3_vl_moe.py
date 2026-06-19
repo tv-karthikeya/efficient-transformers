@@ -6,7 +6,7 @@
 # -----------------------------------------------------------------------------
 import math
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
-
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -666,8 +666,16 @@ class QEffQwen3VLMoeTextModel(Qwen3VLMoeTextModel):
     ):
         visual_pos_masks = visual_pos_masks.unsqueeze(-1).expand(-1, -1, self.config.hidden_size)
         visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
-        visual_mask = visual_pos_masks.to(hidden_states.dtype)
-        return hidden_states + (visual_embeds * visual_mask)
+        if  os.getenv("WITHOUT_TORCH_WHERE", "0") == "1":
+            print(">>>>>>>>>>> without torch where <<<<<<")
+            visual_mask = visual_pos_masks.to(hidden_states.dtype)
+            return hidden_states + (visual_embeds * visual_mask)
+        else:
+            print(">>>>>>>>>>> with torch where <<<<<<")
+            hidden_states = hidden_states.clone()
+            mixed_embeds = hidden_states + visual_embeds
+            local_this = torch.where(visual_pos_masks, mixed_embeds, hidden_states)
+            return local_this
 
 
 class QEffPrefillChunkedQwen3VLMoeTextSparseMoeBlock(Qwen3VLMoeTextSparseMoeBlock):

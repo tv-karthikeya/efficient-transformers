@@ -18,24 +18,24 @@ from transformers import AutoConfig, AutoProcessor
 from QEfficient import QEFFAutoModelForImageTextToText
 from QEfficient.generation.cloud_infer import QAICInferenceSession
 
-# model_id = "Qwen/Qwen3-VL-30B-A3B-Instruct"
-model_id = "tiny-random/qwen3-vl-moe"
+model_id = "Qwen/Qwen3-VL-30B-A3B-Instruct"
+# model_id = "tiny-random/qwen3-vl-moe"
 config = AutoConfig.from_pretrained(model_id)
-config.dtype = "float16"
+config.dtype = "float32"
 
 # For faster execution user can run with lesser layers, For Testing Purpose Only
 # config.vision_config.depth = 9
-# config.text_config.num_hidden_layers = 6
+config.text_config.num_hidden_layers = 3
 # config.vision_config.deepstack_visual_indexes = [8]
 
 qeff_model = QEFFAutoModelForImageTextToText.from_pretrained(
-    model_id, attn_implementation="eager", kv_offload=True, config=config, dtype=torch.float16, layerwise=False
+    model_id, attn_implementation="eager", kv_offload=True, config=config, dtype=torch.float32, layerwise=False, enable_proxy=True
 )
 tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
 processor = AutoProcessor.from_pretrained(model_id)
 
 PREFILL_SEQ_LEN = 128
-CTX_LEN = 4096
+CTX_LEN = 1024
 BS = 1
 
 skip_vision = False
@@ -134,7 +134,7 @@ else:
 messages = [messages] * BS
 
 texts = [processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in messages]
-
+print(f">>>>> texts: {texts}")
 image_inputs, video_inputs = process_vision_info(messages)
 inputs = processor(
     text=texts,
@@ -150,7 +150,7 @@ input_len = inputs["attention_mask"].sum(1, keepdims=True)
 input_ids_length = inputs["input_ids"].shape[1]
 num_chunks = -(input_ids_length // -PREFILL_SEQ_LEN)  # ceil divide without float
 padded_len = num_chunks * PREFILL_SEQ_LEN  # Convert to a multiple of prompt_len
-generation_len = CTX_LEN - input_len.max()
+generation_len = 50 # CTX_LEN - input_len.max()
 print(f"generation_len : {generation_len}")
 generated_ids = np.full((BS, generation_len + 1), pad_token_id)
 
@@ -257,3 +257,4 @@ for i in range(generation_len - 2):
 ft = perf_counter()
 print(f"decode tok/sec={(generation_len - 2) / (ft - st)}")
 print(f"\noutput\n{tokenizer.decode(all_outputs)}")
+print(all_outputs)

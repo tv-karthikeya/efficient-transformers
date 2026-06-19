@@ -390,6 +390,8 @@ class QEFFBaseModel(ABC):
             input_names = aligned_input_names
 
         try:
+            import time
+            start = time.perf_counter()
             torch.onnx.export(
                 self.model,
                 (),
@@ -401,6 +403,8 @@ class QEFFBaseModel(ABC):
                 opset_version=constants.ONNX_EXPORT_OPSET,
                 **export_kwargs,
             )
+            end = time.perf_counter()
+            print(f">>>>>>>> Export time : {end - start:.2f} secs ")
             logger.info("PyTorch export successful")
             _ = self._offload_model_weights(offload_pt_weights)
             model = onnx.load(onnx_path, load_external_data=False)
@@ -1006,9 +1010,15 @@ class QEFFBaseModel(ABC):
 
         command.append(f"-aic-binary-dir={qpc_path}")
         logger.info(f"Running compiler: {' '.join(command)}")
+        print(f"Running compiler: {' '.join(command)}")
 
         try:
+            import time
+            start =  time.perf_counter()
             subprocess.run(command, capture_output=True, check=True)
+            end = time.perf_counter()
+            print(f">>>>>>>> compile time : {end - start:.2f} secs ")
+
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
                 "\n".join(
