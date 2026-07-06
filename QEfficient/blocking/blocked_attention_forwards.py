@@ -774,7 +774,7 @@ def blocked_qkv_attention_forward_prefill_online(
         r_chunks = []
         for acc in accs:
             rc = acc["rc"]
-            out = acc["o_acc"] / acc["s_acc"].unsqueeze(-1)
+            out = acc["o_acc"]
             r_chunks.append(out.view(B, num_cores, rc, tc, D))
         t_chunks.append(torch.cat(r_chunks, dim=2))
 
