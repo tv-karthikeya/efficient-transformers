@@ -2048,7 +2048,6 @@ class _QEffAutoModelForImageTextToTextDualQPC:
         layerwise: bool = False,
         layerwise_window_size: int = 1,
         kv_cache_prefix: Optional[str] = None,
-        moe_prefill_packed_chunk_size: int = constants.MOE_PREFILL_PACKED_CHUNK_SIZE,
         **compiler_options,
     ) -> str:
         """
@@ -3944,6 +3943,7 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
         enable_chunking=False,
         num_cores: int = constants.DEFAULT_AIC_NUM_CORES,
         moe_prefill_packed_chunk_size: int = constants.MOE_PREFILL_PACKED_CHUNK_SIZE,
+        moe_prefill_target_seq_len: Optional[int] = None,
     ) -> int:
         self.hash_params["prefill_only"] = True
         compile_seq_len = prefill_seq_len or constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN
@@ -4054,6 +4054,7 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
         prefill_seq_len: Optional[int] = None,
         num_cores: int = constants.DEFAULT_AIC_NUM_CORES,
         moe_prefill_packed_chunk_size: int = constants.MOE_PREFILL_PACKED_CHUNK_SIZE,
+        moe_prefill_target_seq_len: Optional[int] = None,
         layerwise: bool = False,
         layerwise_window_size: int = 1,
         kv_cache_prefix: Optional[str] = None,
@@ -4096,6 +4097,7 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
                 prefill_seq_len=prefill_seq_len,
                 num_cores=num_cores,
                 moe_prefill_packed_chunk_size=moe_prefill_packed_chunk_size,
+                moe_prefill_target_seq_len=moe_prefill_target_seq_len or prefill_seq_len,
                 kv_cache_prefix=kv_cache_prefix,
                 **kwargs,
             )
