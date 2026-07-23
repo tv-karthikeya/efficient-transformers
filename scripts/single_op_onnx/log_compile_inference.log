@@ -1,0 +1,231 @@
+============================================ GEMM =======================
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ /opt/qti-aic/exec/qaic-compile -m=/home/vtirumal/mainline_new/single_op_onnx_files/gemm_exports/fp16/gemm_K8192_N1024.onnx  -on
+nx-define-symbol=M,8 -convert-to-fp16  -aic-hw  -aic-hw-version=ai100  -aic-num-cores=16 -aic-binary-dir=./fp16_gemma_qpc
+Reading ONNX Model from /home/vtirumal/mainline_new/single_op_onnx_files/gemm_exports/fp16/gemm_K8192_N1024.onnx
+Compile started ............... 
+Compiling model with FP16 precision.
+Generated binary is present at ./fp16_gemma_qpc
+
+
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ sudo /opt/qti-aic/exec/qaic-runner   -t ./fp16_gemma_qpc/ -n 10  -v
+[sudo] password for vtirumal: 
+Using bounded random inputs
+ ---- Stats ----
+Program name:
+Running at max rate
+InferenceCnt 10 TotalDuration 1408us BatchSize 1 Inf/Sec 7102.273
+
+============================================softmax 
+
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ python3 /home/vtirumal/mainline_new/efficient-transformers/scripts/single_op_onnx/export_softmax.py
+Exported /home/vtirumal/mainline_new/single_op_onnx_files/softmax/softmax_bf16.onnx → /home/vtirumal/mainline_new/single_op_onnx_files/softmax/softmax_bf16.onnx  (dtype=bf16)
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ python3 /home/vtirumal/mainline_new/efficient-transformers/scripts/single_op_onnx/export_softmax.py
+Exported /home/vtirumal/mainline_new/single_op_onnx_files/softmax/softmax_fp16.onnx → /home/vtirumal/mainline_new/single_op_onnx_files/softmax/softmax_fp16.onnx  (dtype=fp16)
+
+ polygraphy inspect model /home/vtirumal/mainline_new/single_op_onnx_files/softmax/softmax_fp16.onnx 
+[W] 'colored' module is not installed, will not use colors when logging. To enable colors, please install the 'colored' module: python3 -m pip install colored
+[I] Loading model: /home/vtirumal/mainline_new/single_op_onnx_files/softmax/softmax_fp16.onnx
+[I] ==== ONNX Model ====
+    Name: main_graph | ONNX Opset: 17
+    
+    ---- 1 Graph Input(s) ----
+    {input [dtype=float16, shape=('batch_size', 'dim_size')]}
+    
+    ---- 1 Graph Output(s) ----
+    {output [dtype=float16, shape=('batch_size', 'dim_size')]}
+    
+    ---- 0 Initializer(s) ----
+    
+    ---- 1 Node(s) ----
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ 
+
+
+
+ /opt/qti-aic/exec/qaic-compile -m=/home/vtirumal/mainline_new/single_op_onnx_files/softmax/softmax_fp16.onnx  -onnx-define-symb
+ol=batch_size,1024 -onnx-define-symbol=dim_size,1024  -convert-to-fp16  -aic-hw  -aic-hw-version=ai100  -aic-num-cores=16 -aic-binary-dir=../fp16_softmax
+Reading ONNX Model from /home/vtirumal/mainline_new/single_op_onnx_files/softmax/softmax_fp16.onnx
+Compile started ............... 
+Compiling model with FP16 precision.
+Generated binary is present at ../fp16_softmax
+
+
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ /opt/qti-aic/exec/qaic-runner   -t ../fp16_softmax/ -n 10  -v
+[16:19:53.853][warning][LogCommon][initializeUdev][ThId:8174] Failed to resize udev monitor buffer. Using default size. Some events may be missed.
+Using bounded random inputs
+ ---- Stats ----
+Program name:
+Running at max rate
+InferenceCnt 10 TotalDuration 3270us BatchSize 1 Inf/Sec 3058.104
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ 
+
+============================================================================================================================================================================================================================
+
+================================= ADD 
+python3 /home/vtirumal/mainline_new/efficient-transformers/scripts/single_op_onnx/export_add.py 
+Exported /home/vtirumal/mainline_new/single_op_onnx_files/add/add_fp16.onnx → /home/vtirumal/mainline_new/single_op_onnx_files/add/add_fp16.onnx  (dtype=fp16)
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ python3 /home/vtirumal/mainline_new/efficient-transformers/scripts/single_op_onnx/export_add.py 
+Exported /home/vtirumal/mainline_new/single_op_onnx_files/add/add_bf16.onnx → /home/vtirumal/mainline_new/single_op_onnx_files/add/add_bf16.onnx  (dtype=bf16)
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ polygraphy inspect model /home/vtirumal/mainline_new/single_op_onnx_files/add/add_fp16.onnx 
+[W] 'colored' module is not installed, will not use colors when logging. To enable colors, please install the 'colored' module: python3 -m pip install colored
+[I] Loading model: /home/vtirumal/mainline_new/single_op_onnx_files/add/add_fp16.onnx
+[I] ==== ONNX Model ====
+    Name: main_graph | ONNX Opset: 17
+    
+    ---- 2 Graph Input(s) ----
+    {input_x [dtype=float16, shape=('batch_size', 'dim')],
+     input_y [dtype=float16, shape=('batch_size', 'dim')]}
+    
+    ---- 1 Graph Output(s) ----
+    {output [dtype=float16, shape=('batch_size', 'dim')]}
+    
+    ---- 0 Initializer(s) ----
+    
+    ---- 1 Node(s) ----
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ 
+
+
+================================================= REDUCE SUM ===========================================================================================================================================================================
+
+python3 /home/vtirumal/mainline_new/efficient-transformers/scripts/single_op_onnx/export_reduce_sum.py
+Exported reduce_sum_bf16.onnx → /home/vtirumal/mainline_new/efficient-transformers/reduce_sum_bf16.onnx  (dtype=bf16)
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ python3 /home/vtirumal/mainline_new/efficient-transformers/scripts/single_op_onnx/export_reduce_sum.py
+Exported reduce_sum_fp16.onnx → /home/vtirumal/mainline_new/efficient-transformers/reduce_sum_fp16.onnx  (dtype=fp16)
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ polygraphy inspect model /home/vtirumal/mainline_new/efficient-transformers/reduce_sum_fp16.onnx 
+
+polygraphy inspect model /home/vtirumal/mainline_new/efficient-transformers/reduce_sum_fp16.onnx 
+[W] 'colored' module is not installed, will not use colors when logging. To enable colors, please install the 'colored' module: python3 -m pip install colored
+[I] Loading model: /home/vtirumal/mainline_new/efficient-transformers/reduce_sum_fp16.onnx
+[I] ==== ONNX Model ====
+    Name: main_graph | ONNX Opset: 17
+    
+    ---- 1 Graph Input(s) ----
+    {input [dtype=float16, shape=('batch_size', 'dim_size')]}
+    
+    ---- 1 Graph Output(s) ----
+    {output [dtype=float16, shape=('batch_size', 'dim_size')]}
+    
+    ---- 0 Initializer(s) ----
+    
+    ---- 2 Node(s) ----
+
+
+/opt/qti-aic/exec/qaic-compile -m=/home/vtirumal/mainline_new/efficient-transformers/reduce_sum_fp16.onnx  -onnx-define-symbol=batch_size,1024 -onnx-define-symbol=dim_size,1024  -convert-to-fp16  -aic-hw  -aic-hw-version=ai100  -aic-num-cores=16 -aic-binary-dir=../fp16_reduce_sum
+Reading ONNX Model from /home/vtirumal/mainline_new/efficient-transformers/reduce_sum_fp16.onnx
+Compile started ............... 
+Compiling model with FP16 precision.
+Generated binary is present at ../fp16_reduce_sum
+
+
+/opt/qti-aic/exec/qaic-runner   -t ../fp16_reduce_sum/ -n 10  -v
+[16:37:21.338][warning][LogCommon][initializeUdev][ThId:2427] Failed to resize udev monitor buffer. Using default size. Some events may be missed.
+Using bounded random inputs
+ ---- Stats ----
+Program name:
+Running at max rate
+InferenceCnt 10 TotalDuration 2864us BatchSize 1 Inf/Sec 3491.620
+
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ 
+
+=========================================================== layer NORM 
+
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ export HF_HUB_CACHE=/home/huggingface_hub; export TMPDIR=/home/vtirumal/tmp_dir/
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ python3 /home/vtirumal/mainline_new/efficient-transformers/scripts/single_op_onnx/export_layernorm.py
+Exported layernorm_bf16.onnx → /home/vtirumal/mainline_new/efficient-transformers/scripts/layernorm_bf16.onnx  (dtype=bf16)
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ python3 /home/vtirumal/mainline_new/efficient-transformers/scripts/single_op_onnx/export_layernorm.py
+Exported layernorm_fp16.onnx → /home/vtirumal/mainline_new/efficient-transformers/scripts/layernorm_fp16.onnx  (dtype=fp16)
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ mv /home/vtirumal/mainline_new/efficient-transformers/scripts/layernorm_fp16.onnx /home/vtirumal/mainline_new/single_op_onnx_files/layer_norm
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ mv /home/vtirumal/mainline_new/efficient-transformers/scripts/layernorm_bf16.onnx  /home/vtirumal/mainline_new/single_op_onnx_files/layer_norm
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ 
+
+
+
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ /opt/qti-aic/exec/qaic-compile -m=/home/vtirumal/mainline_new/single_op_onnx_files/layer_norm/layernorm_fp16.onnx -onnx-define-symbol=batch_size,1024 -onnx-define-symbol=dim_size,1024  -convert-to-fp16  -aic-hw  -aic-hw
+-version=ai100  -aic-num-cores=16 -aic-binary-dir=../fp16_layer_norm
+Reading ONNX Model from /home/vtirumal/mainline_new/single_op_onnx_files/layer_norm/layernorm_fp16.onnx
+Compile started ............... 
+Compiling model with FP16 precision.
+Generated binary is present at ../fp16_layer_norm
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ 
+
+
+
+
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ /opt/qti-aic/exec/qaic-runner   -t ../fp16_layer_norm/ -n 10  -v
+[05:50:37.293][warning][LogCommon][initializeUdev][ThId:3035] Failed to resize udev monitor buffer. Using default size. Some events may be missed.
+Using bounded random inputs
+ ---- Stats ----
+Program name:
+Running at max rate
+InferenceCnt 10 TotalDuration 3646us BatchSize 1 Inf/Sec 2742.732
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers/scripts$ 
+
+=========================================================== Quant matmul 
+polygraphy inspect model /home/vtirumal/mainline_new/efficient-transformers/quant_matmul_int8_out.onnx 
+[W] 'colored' module is not installed, will not use colors when logging. To enable colors, please install the 'colored' module: python3 -m pip install colored
+[I] Loading model: /home/vtirumal/mainline_new/efficient-transformers/quant_matmul_int8_out.onnx
+[I] ==== ONNX Model ====
+    Name: main_graph | ONNX Opset: 17
+    
+    ---- 5 Graph Input(s) ----
+    {mat_a [dtype=int8, shape=('num_tokens', 8192)],
+     mat_b [dtype=int8, shape=(128, 8192)],
+     scale_a [dtype=float32, shape=()],
+     scale_b [dtype=float32, shape=()],
+     output_scale [dtype=float32, shape=()]}
+    
+    ---- 1 Graph Output(s) ----
+    {output [dtype=int8, shape=('num_tokens', 128)]}
+    
+    ---- 0 Initializer(s) ----
+    
+    ---- 13 Node(s) ----
+
+ /opt/qti-aic/exec/qaic-compile -m=/home/vtirumal/mainline_new/efficient-transformers/quant_matmul_int8_out.onnx -onnx-define-symbol=num_tokens,48  -aic-hw  -aic-hw-version=ai100 -aic-num-cores=16 -aic-binary-dir=../rerun 
+Reading ONNX Model from /home/vtirumal/mainline_new/efficient-transformers/quant_matmul_int8_out.onnx
+Compile started ............... 
+Compiling model with FP32 precision.
+QAIC_ERROR: 
+Error message:  [Operator-'/Cast', opset_version-17, ir_version-8] : Unsupported cast from quantized type. 
+QAICException:Unable to AddNodesToGraphFromModel
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ /opt/qti-aic/exec/qaic-compile -m=/home/vtirumal/mainline_new/efficient-transformers/quant_matmul_int8_out.onnx -onnx-define-symbol=num_tokens,48  -convert-to-fp16  -aic-hw  -aic-hw-version=ai100 -aic-num-cores=16  -aic-binary-
+dir=../rerun2
+Reading ONNX Model from /home/vtirumal/mainline_new/efficient-transformers/quant_matmul_int8_out.onnx
+Compile started ............... 
+Compiling model with FP16 precision.
+QAIC_ERROR: 
+Error message:  [Operator-'/Cast', opset_version-17, ir_version-8] : Unsupported cast from quantized type. 
+QAICException:Unable to AddNodesToGraphFromModel
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ 
+
+vtirumal@gb-293-blr-04:~/model_zoo/model_zoo/customer/internal/Staging/single_op_onnx_files$ /opt/qti-aic/exec/qaic-compile -m=quant_int8/quant_matmul_int8_out.onnx -onnx-define-symbol=num_tokens,48  -aic-hw  -aic-hw-version=ai100 -aic-num-cores=16  -quantization-precision=Int8 -quantizatio
+n-precision-bias=Int8  -quantization-schema-activations=symmetric_with_uint8  -quantization-schema-constants=symmetric_with_uint8 -aic-binary-dir=../int8_quant6
+Reading ONNX Model from quant_int8/quant_matmul_int8_out.onnx
+Compile started ............... 
+Compiling model with Int8 precision using PGQ.
+QAIC_ERROR: 
+Error message:  [Operator-'/Cast', opset_version-17, ir_version-8] : Unsupported cast from quantized type. 
+QAICException:Unable to AddNodesToGraphFromModel
+
+
+=========================================================== Quant MOE 
+ 
+(new_env) vtirumal@gb-293-blr-04:~/mainline_new/efficient-transformers$ polygraphy inspect model /home/vtirumal/mainline_new/efficient-transformers/moe_quant_group_gemm_int8_out.onnx
+[W] 'colored' module is not installed, will not use colors when logging. To enable colors, please install the 'colored' module: python3 -m pip install colored
+[I] Loading model: /home/vtirumal/mainline_new/efficient-transformers/moe_quant_group_gemm_int8_out.onnx
+[I] ==== ONNX Model ====
+    Name: main_graph | ONNX Opset: 17
+    
+    ---- 6 Graph Input(s) ----
+    {x [dtype=int8, shape=('num_tokens', 8192)],
+     expert_weights [dtype=int8, shape=(128, 8192, 8192)],
+     expert_ids [dtype=int32, shape=('num_tokens',)],
+     scale_x [dtype=float32, shape=()],
+     scale_w [dtype=float32, shape=()],
+     output_scale [dtype=float32, shape=()]}
+    
+    ---- 1 Graph Output(s) ----
+    {output [dtype=int8, shape=('num_tokens', 'Castoutput_dim_1')]}
+    
+    ---- 0 Initializer(s) ----
+    
+    ---- 1213 Node(s) ----

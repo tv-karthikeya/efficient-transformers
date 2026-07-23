@@ -7,14 +7,14 @@
 
 import argparse
 
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from QEfficient import QEFFAutoModelForCausalLM
-
+import torch 
 
 def main():
     parser = argparse.ArgumentParser(description="Continuous batching inference")
-    parser.add_argument("--model-name", type=str, default="Qwen/Qwen2-1.5B-Instruct", help="HuggingFace model ID")
+    parser.add_argument("--model-name", type=str, default="hpcai-tech/grok-1", help="HuggingFace model ID")
     parser.add_argument(
         "--prompts",
         type=str,
@@ -39,8 +39,16 @@ def main():
     print(f"Processing {len(prompt_list)} prompts with continuous batching")
 
     # Load tokenizer and model with continuous batching enabled
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = QEFFAutoModelForCausalLM.from_pretrained(args.model_name, continuous_batching=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name,trust_remote_code=True)
+    config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
+    config.num_hidden_layers = 1
+    config.dtype = torch.float32
+    if hasattr(config, "tie_word_embeddings"):
+        config.tie_word_embeddings = False
+    # model = QEFFAutoModelForCausalLM.from_pretrained(args.model_name, config=config, continuous_batching=True)  
+    # breakpoint()
+    hf_model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+    model = QEFFAutoModelForCausalLM(hf_model, continuous_batching=True)
 
     # Compile the model with full_batch_size for continuous batching
     qpc_path = model.compile(
@@ -48,7 +56,8 @@ def main():
         ctx_len=args.ctx_len,
         full_batch_size=args.full_batch_size,
         num_cores=args.num_cores,
-        num_devices=(1 if args.device_group is None else len(args.device_group)),
+        num_devices=4,
+        use_onnx_subfunctions=True,
     )
     print(f"Model compiled to: {qpc_path}")
 
@@ -56,7 +65,6 @@ def main():
     exec_info = model.generate(
         tokenizer=tokenizer,
         prompts=prompt_list,
-        device_id=args.device_group,
         generation_len=args.generation_len,
     )
 
