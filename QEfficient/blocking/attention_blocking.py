@@ -206,10 +206,15 @@ def past_key_value_update(
     if past_key_value is not None:
         cache_kwargs = {"batch_index": batch_index, "position_ids": position_ids}
         if sliding_window is not None:
+            sliding_window_len = getattr(past_key_value, "sliding_window_len", None)
+            if sliding_window_len is None:
+                sliding_window_len = getattr(getattr(module, "config", None), "sliding_window", None)
+            if sliding_window_len is None:
+                sliding_window_len = sliding_window
             cache_kwargs.update(
                 {
                     "is_sliding": sliding_window is not None,
-                    "sliding_window": past_key_value.sliding_window_len,
+                    "sliding_window": sliding_window_len,
                 }
             )
         if comp_ctx_lengths is not None:
