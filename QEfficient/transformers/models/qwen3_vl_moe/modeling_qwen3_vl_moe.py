@@ -916,6 +916,8 @@ class QEffQwen3VLDecoderWrapper(nn.Module):
             if batch_fold_cb:
                 hidden_states = _batch_index_gather(hidden_states, batch_index)
             logits = self.model.lm_head(hidden_states)
+            if batch_fold_cb:
+                logits = _batch_index_gather(logits, batch_index)
             image_idx = (indices1.max() + 1).unsqueeze(0).unsqueeze(0)
             return logits, vision_embeds, deepstack_features, image_idx, outputs.past_key_values
 
@@ -978,6 +980,8 @@ class QEffQwen3VLDecoderWrapper(nn.Module):
             if batch_fold_cb:
                 hidden_states = _batch_index_gather(hidden_states, batch_index)
             logits = self.model.lm_head(hidden_states)
+            if batch_fold_cb:
+                logits = _batch_index_gather(logits, batch_index)
             return logits, outputs.past_key_values
 
         else:
