@@ -114,9 +114,22 @@ def _get_moe_num_experts(module: nn.Module) -> Optional[int]:
     num_experts = getattr(experts, "num_experts", None)
     if num_experts is not None:
         return int(num_experts)
+    if experts is not None:
+        try:
+            return len(experts)
+        except TypeError:
+            pass
     gate = getattr(module, "gate", None)
     num_experts = getattr(gate, "num_experts", None)
-    return int(num_experts) if num_experts is not None else None
+    if num_experts is not None:
+        return int(num_experts)
+    config = getattr(module, "config", None)
+    for attr_name in ("n_routed_experts", "num_experts"):
+        num_experts = getattr(config, attr_name, None)
+        if num_experts is not None:
+            return int(num_experts)
+    all_gate_qweight = getattr(module, "all_gate_qweight", None)
+    return int(all_gate_qweight.shape[0]) if all_gate_qweight is not None else None
 
 
 def _configure_vlm_moe_expert_parallel(
@@ -1769,13 +1782,20 @@ class _QEffAutoModelForImageTextToTextDualQPC:
             else:
                 self.__update_prefill_transform(False, retain_full_kv=kwargs.get("retain_full_kv", False))
 
-        _blocking_cfg = self.lang_model.hash_params.get("blocking_kwargs", None)
-        batch_fold = not prefill_only and _blocking_cfg is not None and _blocking_cfg.mode == BlockingMode.KV_BATCH_FOLD
-
-        if batch_fold:
-            seq_len = 1 if seq_len else None
-
-        onnx_kwargs = {"prefill_seq_len": seq_len, "batch_size": kwargs.get("batch_size", bs), "batch_fold": batch_fold}
+        onnx_kwargs = {"prefill_seq_len": seq_len, "batch_size": bs}
+        dynamic_axes_kwargs = {
+            "kv_offload": True,
+            "continuous_batching": self.continuous_batching,
+            "comp_ctx_lengths": self.comp_ctx_lengths_decode,
+        }
+        if getattr(self.model.config, "model_type", None) == "qwen3_vl_moe":
+            _blocking_cfg = self.lang_model.hash_params.get("blocking_kwargs", None)
+            batch_fold = not prefill_only and _blocking_cfg is not None and _blocking_cfg.mode == BlockingMode.KV_BATCH_FOLD
+            if batch_fold:
+                onnx_kwargs["prefill_seq_len"] = 1 if seq_len else None
+            onnx_kwargs["batch_size"] = kwargs.get("batch_size", bs)
+            onnx_kwargs["batch_fold"] = batch_fold
+            dynamic_axes_kwargs["batch_fold"] = batch_fold
 
         # TODO This is a temporary change as continous batching is enabled only for few models. Once support is added for all the models this exception handing can be removed.
         try:
@@ -1785,12 +1805,7 @@ class _QEffAutoModelForImageTextToTextDualQPC:
                 comp_ctx_lengths=self.comp_ctx_lengths_decode,
                 **onnx_kwargs,
             )
-            dynamic_axes = self.model.get_onnx_dynamic_axes(
-                kv_offload=True,
-                continuous_batching=self.continuous_batching,
-                comp_ctx_lengths=self.comp_ctx_lengths_decode,
-                batch_fold=batch_fold,
-            )
+            dynamic_axes = self.model.get_onnx_dynamic_axes(**dynamic_axes_kwargs)
         except TypeError:
             inputs = self.model.get_dummy_inputs(
                 kv_offload=True, comp_ctx_lengths=self.comp_ctx_lengths_decode, **onnx_kwargs
@@ -4162,22 +4177,6 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
                     )
                 self.__update_prefill_transform(enable=True, enable_chunking=enable_chunking)
                 self.hash_params.pop("retain_full_kv", None)
-<<<<<<< HEAD
-
-                if "DeepseekV3ForCausalLM" not in (getattr(self.model.config, "architectures", None) or []):
-                    seq_len = self.get_seq_len_and_handle_specialized_prefill_model(
-                        prefill_seq_len=prefill_seq_len,
-                        enable_chunking=enable_chunking,
-                        num_cores=num_cores,
-                        moe_prefill_packed_chunk_size=moe_prefill_packed_chunk_size,
-                    )
-                    if self.model.config.model_type == "gpt_oss" and hasattr(self.model.model, "set_rope_cache_len"):
-                        self.model.model.set_rope_cache_len(seq_len)
-                    sliding_window = getattr(self.model.config, "sliding_window", None)
-                    kv_cache_shape[2] = (
-                        seq_len + (sliding_window if sliding_window is not None else 0) if enable_chunking else seq_len
-                    )
-=======
                 seq_len = self.get_seq_len_and_handle_specialized_prefill_model(
                     prefill_seq_len=prefill_seq_len,
                     enable_chunking=enable_chunking,
@@ -4190,7 +4189,6 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
                 kv_cache_shape[2] = (
                     seq_len + (sliding_window if sliding_window is not None else 0) if enable_chunking else seq_len
                 )
->>>>>>> 678c17a2 (fixed seq_len decision during export)
             else:
                 self.__update_prefill_transform(False, retain_full_kv=kwargs.get("retain_full_kv", False))
                 self.hash_params.pop("prefill_only", None)
