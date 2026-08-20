@@ -158,6 +158,8 @@ def _configure_vlm_moe_expert_parallel(
     if prefill_only:
         if mdp_num_partitions is None:
             mdp_num_partitions = 1
+        if mdp_num_partitions == 1 and num_devices > 1:
+            raise ValueError("`mdp_num_partitions` must be greater than 1 if we are doing tensor slicing across multiple devices in prefill")
         if mdp_num_partitions <= 0:
             raise ValueError("`mdp_num_partitions` must be greater than 0 when configuring MoE expert parallelism.")
         if num_devices % mdp_num_partitions != 0:
@@ -1790,7 +1792,9 @@ class _QEffAutoModelForImageTextToTextDualQPC:
         }
         if getattr(self.model.config, "model_type", None) == "qwen3_vl_moe":
             _blocking_cfg = self.lang_model.hash_params.get("blocking_kwargs", None)
-            batch_fold = not prefill_only and _blocking_cfg is not None and _blocking_cfg.mode == BlockingMode.KV_BATCH_FOLD
+            batch_fold = (
+                not prefill_only and _blocking_cfg is not None and _blocking_cfg.mode == BlockingMode.KV_BATCH_FOLD
+            )
             if batch_fold:
                 onnx_kwargs["prefill_seq_len"] = 1 if seq_len else None
             onnx_kwargs["batch_size"] = kwargs.get("batch_size", bs)
@@ -3979,7 +3983,7 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
         if enable_chunking:
             self.hash_params["chunking"] = True
 
-        if self.model.config.model_type in {"gpt_oss"}:
+        if self.model.config.model_type in {"gpt_oss"} and not enable_chunking:
             return self.handle_gpt_oss_env_variable_legacy_burden(prefill_seq_len)
 
         if expert_parallel_is_triggered:

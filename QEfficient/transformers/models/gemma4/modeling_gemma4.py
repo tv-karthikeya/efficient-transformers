@@ -34,7 +34,6 @@ from QEfficient.blocking.attention_blocking import (
     AttentionBlockingConfig,
     BlockingMode,
     generic_blocked_attention_interface,
-    prefill_blocked_attention_interface,
 )
 from QEfficient.customop.ctx_scatter_gather import (
     CtxGatherFunc3DGeneralized,
@@ -488,8 +487,10 @@ class QEffPrefillChunkedGemma4TextExperts(Gemma4TextExperts):
 
         T = x.shape[0]
 
-        packed_chunk_size = getattr(self, "expert_blocking_packed_chunk_size", T)
         num_packed_chunks = getattr(self, "expert_blocking_num_packed_chunks", None)
+        packed_chunk_size = (
+            T // num_packed_chunks if num_packed_chunks else getattr(self, "expert_blocking_packed_chunk_size", T)
+        )
 
         # Build dense routing weights [T, E] from top-k indices/weights
         expert_weights = torch.zeros(
@@ -657,40 +658,24 @@ class QEffGemma4TextAttention(Gemma4TextAttention):
                 if past_key_values is not None
                 else int(key_states.shape[-2])
             )
-            use_prefill = blocking_config.prefill_blocking_mode is not None
-            if not use_prefill:
-                attn_output, attn_weights = generic_blocked_attention_interface(
-                    module=self,
-                    query=query_states,
-                    key=key_states,
-                    value=value_states,
-                    attention_mask=attention_mask,
-                    scaling=self.scaling,
-                    layer_idx=self.layer_idx,
-                    past_key_value=past_key_values,
-                    blocking_config=blocking_config,
-                    comp_ctx_lengths=comp_ctx_lengths,
-                    batch_index=batch_index,
-                    position_ids=position_ids,
-                    past_seen_tokens=past_seen_tokens,
-                    sliding_window=self.sliding_window,
-                )
-            else:
-                attn_output, attn_weights = prefill_blocked_attention_interface(
-                    module=self,
-                    query=query_states,
-                    k_cache=key_states,
-                    v_cache=value_states,
-                    attention_mask=attention_mask,
-                    scaling=self.scaling,
-                    layer_idx=self.layer_idx,
-                    past_key_value=past_key_values,
-                    blocking_config=blocking_config,
-                    comp_ctx_lengths=comp_ctx_lengths,
-                    batch_index=batch_index,
-                    position_ids=position_ids,
-                    past_seen_tokens=past_seen_tokens,
-                )
+            attn_output, attn_weights = generic_blocked_attention_interface(
+                module=self,
+                query=query_states,
+                key=key_states,
+                value=value_states,
+                attention_mask=attention_mask,
+                scaling=self.scaling,
+                layer_idx=self.layer_idx,
+                past_key_value=past_key_values,
+                blocking_config=blocking_config,
+                comp_ctx_lengths=comp_ctx_lengths,
+                batch_index=batch_index,
+                position_ids=position_ids,
+                past_seen_tokens=past_seen_tokens,
+                sliding_window=self.sliding_window,
+                prefill_only=blocking_config.mode.is_prefill,
+            )
+
             attn_output = attn_output.reshape(*input_shape, -1).contiguous()
             attn_output = self.o_proj(attn_output)
             return attn_output, attn_weights

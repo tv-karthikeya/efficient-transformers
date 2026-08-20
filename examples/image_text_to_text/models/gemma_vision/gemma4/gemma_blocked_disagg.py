@@ -52,13 +52,12 @@ ENABLE_BLOCKING = True
 ENABLE_HEAPAR = True
 PREFILL_NUM_KV_BLOCKS = 16
 DECODE_NUM_KV_BLOCKS = 8
-KV_BLOCKING_HEADPAR_SPLIT = 0  # 0 => resolved to num_cores
 BATCH_FOLD = False
 
 # Prefill modes:
-# - follow decode attention - pass nothing extra
-# - head parallel offline prefill - pass prefill_blocking_mode: “qkv”, prefill_block_chunks: 2
-# - online prefill - pass prefill_blocking_mode: “online”, prefill_block_chunks: 2
+# - follow decode attention - pass nothing extra (PREFILL_MODE = None)
+# - head parallel offline prefill - blocking_mode: “prefill_qkv”, num_kv_blocks, num_q_blocks
+# - online prefill - blocking_mode: “prefill_online”, num_kv_blocks, num_q_blocks
 PREFILL_MODE = "qkv"  # None, "online" or "qkv" depending on whether we want online prefill or headparallel prefill
 PREFILL_QL_CHUNK = 128
 PREFILL_BLOCK_CHUNKS = -(-PREFILL_SEQ_LEN // PREFILL_QL_CHUNK)
@@ -67,37 +66,38 @@ PREFILL_N_REP_CHUNK = 1
 
 ###############
 # Decode modes:
-# - standard attention - pass enable_blocking and blocking_mode
-# - head parallel blocking - pass  enable_blocking, blocking_mode: “kv” and kv_block_headpar_split: 0
-# - batch fold head parallel - pass enable_blocking, blocking_mode: “kv” and batch_fold: True
+# - standard attention - blocking_mode: "kv"
+# - head parallel blocking - blocking_mode: “kv_headpar” (headpar_split defaults to num_cores)
+# - batch fold head parallel - blocking_mode: “kv_batch_fold”
 
 
 def _decode_qaic_config() -> dict:
     if not ENABLE_BLOCKING:
         return {}
-    cfg = {
+    if BATCH_FOLD:
+        blocking_mode = "kv_batch_fold"
+    elif ENABLE_HEAPAR:
+        blocking_mode = "kv_headpar"
+    else:
+        blocking_mode = "kv"
+    return {
         "enable_blocking": True,
-        "blocking_mode": "kv",
+        "blocking_mode": blocking_mode,
         "num_kv_blocks": DECODE_NUM_KV_BLOCKS,
         "ctx_len": CTX_LEN,
         "skip_kv": True,
     }
-    if ENABLE_HEAPAR:
-        cfg["kv_blocking_headpar_split"] = KV_BLOCKING_HEADPAR_SPLIT
-    if BATCH_FOLD:
-        cfg["batch_fold"] = True
-    return cfg
 
 
 def _qaic_config() -> dict:
     if PREFILL_MODE is None:
         return {}
-    cfg = _decode_qaic_config()
-    cfg["num_kv_blocks"] = PREFILL_NUM_KV_BLOCKS  # for prefill kv blocks
-    cfg["prefill_block_chunks"] = PREFILL_BLOCK_CHUNKS
-    cfg["prefill_blocking_mode"] = PREFILL_MODE
-    cfg["prefill_n_rep_chunk"] = PREFILL_N_REP_CHUNK
-    return cfg
+    return {
+        "blocking_mode": f"prefill_{PREFILL_MODE}",
+        "num_kv_blocks": PREFILL_NUM_KV_BLOCKS,
+        "num_q_blocks": PREFILL_BLOCK_CHUNKS,
+        "n_rep_chunk": PREFILL_N_REP_CHUNK,
+    }
 
 
 prefill_qaic_config = _qaic_config()
