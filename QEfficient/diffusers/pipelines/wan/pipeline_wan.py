@@ -510,7 +510,7 @@ class QEffWanPipeline:
         _, seq_len, _ = prompt_embeds.shape
         prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
-
+        self.text_encoder.qpc_session.deactivate()
         return prompt_embeds, text_encoder_perf
 
     def encode_prompt(
@@ -784,6 +784,7 @@ class QEffWanPipeline:
                     current_transformer_module = self.transformer_high
                     current_guidance_scale = guidance_scale
                 else:
+                    self.transformer_high.qpc_session.deactivate()
                     current_transformer_module = self.transformer_low
                     current_guidance_scale = guidance_scale_2
                 current_model = current_transformer_module.model
@@ -881,6 +882,7 @@ class QEffWanPipeline:
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
 
+        self.transformer_low.qpc_session.deactivate()
         return latents, transformer_perf
 
     def __call__(

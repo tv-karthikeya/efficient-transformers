@@ -32,7 +32,7 @@ from QEfficient import QEffWanPipeline
 # ============================================================================
 
 # Option 1: Basic initialization with default parameters
-pipeline = QEffWanPipeline.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
+pipeline = QEffWanPipeline.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", use_unified=False)
 # Option 2: Non-unified mode (separate high/low transformers)
 # pipeline = QEffWanPipeline.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", use_unified=False)
 
@@ -87,20 +87,20 @@ pipeline.transformer.model.transformer_low.set_adapters(["low_noise"], weights=[
 # Uncomment the following lines to use only a subset of transformer layers:
 #
 # Configure for 2-layer model (faster inference)
-pipeline.transformer.model.transformer_high.config["num_layers"] = 2
-pipeline.transformer.model.transformer_low.config["num_layers"] = 2
+# pipeline.transformer.model.transformer_high.config["num_layers"] = 2
+# pipeline.transformer.model.transformer_low.config["num_layers"] = 2
 
-# Reduce high noise transformer blocks
-original_blocks = pipeline.transformer.model.transformer_high.blocks
-pipeline.transformer.model.transformer_high.blocks = torch.nn.ModuleList(
-    [original_blocks[i] for i in range(0, pipeline.transformer.model.transformer_high.config["num_layers"])]
-)
+# # Reduce high noise transformer blocks
+# original_blocks = pipeline.transformer.model.transformer_high.blocks
+# pipeline.transformer.model.transformer_high.blocks = torch.nn.ModuleList(
+#     [original_blocks[i] for i in range(0, pipeline.transformer.model.transformer_high.config["num_layers"])]
+# )
 
-# Reduce low noise transformer blocks
-org_blocks = pipeline.transformer.model.transformer_low.blocks
-pipeline.transformer.model.transformer_low.blocks = torch.nn.ModuleList(
-    [org_blocks[i] for i in range(0, pipeline.transformer.model.transformer_low.config["num_layers"])]
-)
+# # Reduce low noise transformer blocks
+# org_blocks = pipeline.transformer.model.transformer_low.blocks
+# pipeline.transformer.model.transformer_low.blocks = torch.nn.ModuleList(
+#     [org_blocks[i] for i in range(0, pipeline.transformer.model.transformer_low.config["num_layers"])]
+# )
 
 # ============================================================================
 # OPTIONAL: COMPILE WITH CUSTOM CONFIGURATION
@@ -165,7 +165,7 @@ output = pipeline(
     guidance_scale_2=1.0,  # Secondary guidance scale for dual guidance
     num_inference_steps=4,  # Lightning model uses fewer steps
     generator=torch.manual_seed(42),  # For reproducible results
-    custom_config_path="examples/diffusers/wan/wan_config.json",
+    # custom_config_path="examples/diffusers/wan/wan_config.json",
     height=480,
     width=832,
     use_onnx_subfunctions=True,  # Enable ONNX optimizations
