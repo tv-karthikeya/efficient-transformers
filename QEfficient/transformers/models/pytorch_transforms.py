@@ -289,6 +289,10 @@ from transformers.models.t5.modeling_t5 import (
     T5LayerNorm,
     T5Stack,
 )
+from transformers.models.umt5.modeling_umt5 import (
+    UMT5EncoderModel,
+    UMT5LayerNorm,
+)
 from transformers.models.wav2vec2.modeling_wav2vec2 import (
     Wav2Vec2Encoder,
     Wav2Vec2EncoderStableLayerNorm,
@@ -630,6 +634,10 @@ from QEfficient.transformers.models.starcoder2.modeling_starcoder2 import (
     QEffStarcoder2Model,
 )
 from QEfficient.transformers.models.t5.modeling_t5 import QEffT5Attention, QEffT5LayerNorm, QEffT5Stack
+from QEfficient.transformers.models.umt5.modeling_umt5 import (
+    QEffUMT5EncoderModel,
+    QEffUMT5LayerNorm,
+)
 from QEfficient.transformers.models.wav2vec2.modeling_wav2vec2 import (
     QEffWav2Vec2Encoder,
     QEffWav2Vec2EncoderStableLayerNorm,
@@ -1456,6 +1464,14 @@ class T5ModelTransform(ModuleMappingTransform):
         T5Attention: QEffT5Attention,
         T5LayerNorm: QEffT5LayerNorm,
         T5Stack: QEffT5Stack,
+    }
+
+
+class UMT5ModelTransform(ModuleMappingTransform):
+    # supported architectures
+    _module_mapping = {
+        UMT5EncoderModel: QEffUMT5EncoderModel,
+        UMT5LayerNorm: QEffUMT5LayerNorm,
     }
 
 

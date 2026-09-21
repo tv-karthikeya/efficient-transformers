@@ -86,21 +86,21 @@ pipeline.transformer.model.transformer_low.set_adapters(["low_noise"], weights=[
 #
 # Uncomment the following lines to use only a subset of transformer layers:
 #
-# # Configure for 2-layer model (faster inference)
-# pipeline.transformer.model.transformer_high.config['num_layers'] = 2
-# pipeline.transformer.model.transformer_low.config['num_layers']= 2
-#
-# # Reduce high noise transformer blocks
-# original_blocks = pipeline.transformer.model.transformer_high.blocks
-# pipeline.transformer.model.transformer_high.blocks = torch.nn.ModuleList(
-#     [original_blocks[i] for i in range(0, pipeline.transformer.model.transformer_high.config['num_layers'])]
-# )
-#
-# # Reduce low noise transformer blocks
-# org_blocks = pipeline.transformer.model.transformer_low.blocks
-# pipeline.transformer.model.transformer_low.blocks = torch.nn.ModuleList(
-#     [org_blocks[i] for i in range(0, pipeline.transformer.model.transformer_low.config['num_layers'])]
-# )
+# Configure for 2-layer model (faster inference)
+pipeline.transformer.model.transformer_high.config["num_layers"] = 2
+pipeline.transformer.model.transformer_low.config["num_layers"] = 2
+
+# Reduce high noise transformer blocks
+original_blocks = pipeline.transformer.model.transformer_high.blocks
+pipeline.transformer.model.transformer_high.blocks = torch.nn.ModuleList(
+    [original_blocks[i] for i in range(0, pipeline.transformer.model.transformer_high.config["num_layers"])]
+)
+
+# Reduce low noise transformer blocks
+org_blocks = pipeline.transformer.model.transformer_low.blocks
+pipeline.transformer.model.transformer_low.blocks = torch.nn.ModuleList(
+    [org_blocks[i] for i in range(0, pipeline.transformer.model.transformer_low.config["num_layers"])]
+)
 
 # ============================================================================
 # OPTIONAL: COMPILE WITH CUSTOM CONFIGURATION
@@ -169,7 +169,7 @@ output = pipeline(
     height=480,
     width=832,
     use_onnx_subfunctions=True,  # Enable ONNX optimizations
-    parallel_compile=False,  # Set to True for parallel compilation
+    parallel_compile=True,  # Set to True for parallel compilation
 )
 
 # Extract generated frames and export to video
