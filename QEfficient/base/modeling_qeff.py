@@ -331,6 +331,7 @@ def generate_mdp_compiler_dump(
     dump_command.append(f"-mdp-dump-partition-config={dump_path}")
 
     logger.info(f"Running compiler for MDP dump: {' '.join(dump_command)}")
+    print(f"Running compiler for MDP dump: {' '.join(dump_command)}")
     try:
         subprocess.run(dump_command, capture_output=True, check=True, env=compiler_env)
     except subprocess.CalledProcessError as e:
@@ -1594,6 +1595,7 @@ class QEFFBaseModel(ABC):
             logger.info(f"Writing compiler replay command: {' '.join(command)}")
         else:
             logger.info(f"Running compiler: {' '.join(command)}")
+        print(f"Running compiler: {' '.join(command)}")
 
         if artifacts:
             _copy_model_compiler_input(command, compile_dir, self.weight_spec_path)

@@ -753,11 +753,11 @@ def generate_disagg_mdp_intersection_config(
         "partitions": partition_objs,
     }
 
-    _repair_scoped_alias_partitioning(
-        onnx_path=onnx_path,
-        mdp_json=mdp_json,
-        compiler_dump=dump,
-    )
+    # _repair_scoped_alias_partitioning(
+    #     onnx_path=onnx_path,
+    #     mdp_json=mdp_json,
+    #     compiler_dump=dump,
+    # )
 
     logger.info(
         f"Intersection: {total_kept} nodes kept, {total_dropped} dropped "
